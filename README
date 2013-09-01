@@ -1,0 +1,11 @@
+SYNCHRONOUS SOCKETS
+
+This sockets are working in softirq context, so context switches and memory
+footprint are reduced.
+
+The API is inconsistent by nature since it uses upcalls and downcalls at once
+(in difference with Berkeley Socket API which uses downcalls only).
+It uses upcalls to react on socket events (new data arrived, connection error
+etc) and downcalls to perform user operations (e.g. connect to a host).
+
+See http://natsys-lab.blogspot.ru/2013/03/whats-wrong-with-sockets-performance.html
