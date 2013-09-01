@@ -29,7 +29,13 @@
 #include <net/tcp.h>
 
 #include "common.h"
+#include "log.h"
 #include "sock.h"
+
+MODULE_AUTHOR("NatSys Lab. (http://natsys-lab.com)");
+MODULE_DESCRIPTION("Linux Kernel Synchronous Sockets");
+MODULE_VERSION("0.1.0");
+MODULE_LICENSE("GPL");
 
 static SsHooks *ss_hooks __read_mostly;
 
@@ -80,12 +86,10 @@ ss_send(struct sock *sk, struct sk_buff_head *skb_list, int len)
 	tcb->end_seq += len;
 	tp->write_seq += len;
 
-	printk(KERN_ERR "DBG %s:%d tp->early_retrans_delayed=%d"
-			" is_queue_empty=%d tcp_send_head(sk)=%p"
-			" sk->sk_state=%d\n",
-			__FUNCTION__, __LINE__,
-			tp->early_retrans_delayed, tcp_write_queue_empty(sk),
-			tcp_send_head(sk), sk->sk_state);
+	SS_DBG("%s:%d tp->early_retrans_delayed=%d is_queue_empty=%d"
+	       " tcp_send_head(sk)=%p sk->sk_state=%d\n",
+	       __FUNCTION__, __LINE__, tp->early_retrans_delayed,
+	       tcp_write_queue_empty(sk), tcp_send_head(sk), sk->sk_state);
 
 	tcp_push(sk, flags, mss_now, TCP_NAGLE_OFF|TCP_NAGLE_PUSH);
 }
@@ -197,8 +201,7 @@ ss_tcp_process_connection(struct sk_buff *skb, struct sock *sk,
 	r = ss_tcp_process_skb(skb, sk, off, proto, count);
 	if (r < 0 || r == SS_DROP) {
 		if (r < 0)
-			printk(KERN_WARNING "can't process app data on"
-			       " socket %p\n", sk);
+			SS_WARN("can't process app data on socket %p\n", sk);
 		/*
 		 * Drop connection on internal errors as well as
 		 * on banned packets.
@@ -226,9 +229,9 @@ ss_tcp_process_data(struct sock *sk)
 
 	skb_queue_walk_safe(&sk->sk_receive_queue, skb, tmp) {
 		if (unlikely(before(tp->copied_seq, TCP_SKB_CB(skb)->seq))) {
-			printk(KERN_WARNING "synchronous socket recvmsg bug:"
-			       " TCP sequence gap at seq %X recvnxt %X\n",
-			       tp->copied_seq, TCP_SKB_CB(skb)->seq);
+			SS_WARN("recvmsg bug: TCP sequence gap at seq %X"
+				" recvnxt %X\n",
+				tp->copied_seq, TCP_SKB_CB(skb)->seq);
 			/* TODO drop the connection */
 			goto out;
 		}
@@ -254,9 +257,8 @@ ss_tcp_process_data(struct sock *sk)
 			__kfree_skb(skb);
 		}
 		else {
-			printk(KERN_WARNING "synchronous socket recvmsg bug:"
-			       " overlapping TCP segment at %X seq %X rcvnxt %X"
-			       " len %x\n",
+			SS_WARN("recvmsg bug: overlapping TCP segment at %X"
+				" seq %X rcvnxt %X len %x\n",
 			       tp->copied_seq, TCP_SKB_CB(skb)->seq,
 			       tp->rcv_nxt, skb->len);
 			__kfree_skb(skb);
@@ -287,7 +289,7 @@ ss_tcp_data_ready(struct sock *sk, int bytes)
 		 * Error packet received.
 		 * See sock_queue_err_skb() in linux/net/core/skbuff.c.
 		 */
-		printk(KERN_ERR "error data on synchronous socket %p\n", sk);
+		SS_ERR("error data on socket %p\n", sk);
 	}
 	else if (!skb_queue_empty(&sk->sk_receive_queue)) {
 		ss_tcp_process_data(sk);
@@ -300,8 +302,7 @@ ss_tcp_data_ready(struct sock *sk, int bytes)
 		struct tcp_sock *tp = tcp_sk(sk);
 		if (tp->urg_data & TCP_URG_VALID) {
 			tp->urg_data = 0;
-			printk(KERN_ERR "DBG urgent data on synchronous socket"
-					" %p\n", sk);
+			SS_DBG("urgent data on socket %p\n", sk);
 		}
 	}
 }
@@ -320,7 +321,7 @@ ss_tcp_state_change(struct sock *sk)
 	}
 	else if (sk->sk_state == TCP_CLOSE_WAIT) {
 		/* Connection has closed. */
-		printk(KERN_ERR "DBG connection closed on socket %p\n", sk);
+		SS_DBG("connection closed on socket %p\n", sk);
 
 		if (sk->sk_destruct)
 			sk->sk_destruct(sk);
@@ -334,7 +335,7 @@ EXPORT_SYMBOL(ss_tcp_state_change);
 void
 ss_tcp_error(struct sock *sk)
 {
-	printk(KERN_WARNING "error on synchronous socket %p\n", sk);
+	SS_DBG("process error on socket %p\n", sk);
 
 	if (sk->sk_destruct)
 		sk->sk_destruct(sk);
@@ -346,6 +347,7 @@ EXPORT_SYMBOL(ss_tcp_error);
  *  	Sockets initialization
  * ------------------------------------------------------------------------
  */
+
 /*
  * Only one user for now, don't care about registration races.
  */

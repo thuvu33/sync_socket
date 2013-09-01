@@ -1,6 +1,6 @@
-SYNCHRONOUS SOCKETS
+	Linux Kernel Synchronous Sockets
 
-This sockets are working in softirq context, so context switches and memory
+this sockets are working in softirq context, so context switches and memory
 footprint are reduced.
 
 The API is inconsistent by nature since it uses upcalls and downcalls at once
@@ -8,4 +8,8 @@ The API is inconsistent by nature since it uses upcalls and downcalls at once
 It uses upcalls to react on socket events (new data arrived, connection error
 etc) and downcalls to perform user operations (e.g. connect to a host).
 
+The modules uses number of standard Linux calls (currently TCP only), so the
+kernel must be patched with linux-3.10.10-sync_sockets.diff firstly.
+
 See http://natsys-lab.blogspot.ru/2013/03/whats-wrong-with-sockets-performance.html
+for more details.
