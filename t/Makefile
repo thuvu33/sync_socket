@@ -1,4 +1,4 @@
-# Synchronous Socket API.
+# Performance test for Synchronous Sockets.
 #
 # Copyright (C) 2012-2013 NatSys Lab. (info@natsys-lab.com).
 #
@@ -16,15 +16,23 @@
 # this program; if not, write to the Free Software Foundation, Inc., 59
 # Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 
-EXTRA_CFLAGS = -DDEBUG
-KERNEL = /lib/modules/$(shell uname -r)/source
+ifndef CXX
+	CXX	= g++
+endif
 
-obj-m = sync_socket.o
-sync_socket-objs = proto.o sock.o
+TARGETS		= client
+CFLAGS		= -O2 -std=gnu++0x -ggdb -Wall -Werror
+LDFLAGS		= -lpthread
 
-all:
-	make -C $(KERNEL) M=$(PWD) modules
+all : $(TARGETS)
 
-clean:
-	make -C $(KERNEL) M=$(PWD) clean
+client : client.o
+	$(CXX) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+%.o : %.cc $(HEADERS)
+	$(CXX) $(CFLAGS) -c $< -o $@
+
+clean : FORCE
+	rm -f *.o $(TARGETS)
+
+FORCE :
