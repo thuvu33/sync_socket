@@ -28,12 +28,12 @@
 #include <iostream>
 #include <thread>
 
-static const size_t THR_N = 64;
-static const size_t CONNECTIONS = 8192; // connections per thread
+static const size_t THR_N = 16;
+static const size_t CONNECTIONS = 128; // connections per thread
 static const size_t MESSAGES = 1024;
-static const size_t MSG_SZ = 64;
 static int msg[MSG_SZ];
-static struct sockaddr_in saddr;
+static unsigned short PORT = 5000;
+static struct sockaddr_in saddr = {};
 
 void
 run_tcp_load()
@@ -86,17 +86,21 @@ main(int argc, char *argv[])
 	}
 
 	struct rlimit rlim;
-	if (getrlimit(RLIMIT_FSIZE, &rlim)) {
+	if (getrlimit(RLIMIT_NOFILE, &rlim)) {
 		std::cerr << "getrlimit() failed" << std::endl;
 	} else {
-		if (rlim.rlim_cur < THR_N * CONNECTIONS) {
-			std::cerr << "please adjust limit of open files to"
+		if (rlim.rlim_cur < THR_N * CONNECTIONS
+		    || rlim.rlim_max < THR_N * CONNECTIONS)
+		{
+			std::cerr << "please adjust limit of open files to "
 				<< THR_N * CONNECTIONS << std::endl;
 			return 2;
 		}
 	}
 
-	if (inet_pton(AF_INET, argv[1], &saddr) <= 0) {
+	saddr.sin_family = AF_INET;
+	saddr.sin_port = htons(PORT);
+	if (inet_pton(AF_INET, argv[1], &saddr.sin_addr.s_addr) <= 0) {
 		std::cerr << "Bad address: " << argv[1] << std::endl;
 		return 3;
 	}

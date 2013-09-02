@@ -16,11 +16,17 @@
 # this program; if not, write to the Free Software Foundation, Inc., 59
 # Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 
+ifdef MSGSIZE
+	DEFINES	= -DMSG_SZ=$(MSGSIZE)
+else
+	DEFINES	= -DMSG_SZ=64
+endif
+
 ifndef CXX
 	CXX	= g++
 endif
 
-TARGETS		= client
+TARGETS		= client server
 CFLAGS		= -O2 -std=gnu++0x -ggdb -Wall -Werror
 LDFLAGS		= -lpthread
 
@@ -29,8 +35,11 @@ all : $(TARGETS)
 client : client.o
 	$(CXX) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+server : server.o
+	$(CXX) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
 %.o : %.cc $(HEADERS)
-	$(CXX) $(CFLAGS) -c $< -o $@
+	$(CXX) $(CFLAGS) -c $< -o $@ $(DEFINES)
 
 clean : FORCE
 	rm -f *.o $(TARGETS)

@@ -1,0 +1,232 @@
+/**
+ * Multiplexing user-space server for performance testing of
+ * Synchronous Socket API.
+ *
+ * Copyright (C) 2012-2013 NatSys Lab. (info@natsys-lab.com).
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License,
+ * or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+ * FOR A PARTICULAR PURPOSE.
+ * See the GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc., 59
+ * Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+ */
+#include <assert.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <signal.h>
+#include <stdlib.h>
+#include <sys/epoll.h>
+#include <sys/resource.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <time.h>
+
+#include <iostream>
+
+/**
+ * Counts number of requests per second and prints the best one.
+ */
+class RequestsStatistics {
+public:
+	RequestsStatistics()
+		: last_ts_(time(NULL)),
+		curr_(0),
+		max_(0)
+	{}
+
+	void
+	update()
+	{
+		time_t t = time(NULL);
+		if (last_ts_ == t) {
+			curr_++;
+		} else {
+			// recahrge
+			if (curr_ > max_)
+				max_ = curr_;
+			curr_ = 1;
+			last_ts_ = t;
+		}
+	}
+
+	void
+	print()
+	{
+		std::cout << "Best rps: " << std::max(max_, curr_)
+			<< std::endl;
+	}
+
+private:
+	time_t last_ts_;
+	unsigned int curr_;
+	unsigned int max_;
+};
+
+static const size_t MAX_CONNECTIONS = 1000 * 1000;
+static const int READ_SZ = MSG_SZ * sizeof(int);
+static unsigned short PORT = 5000;
+static int msg[MSG_SZ];
+static unsigned int g_counter = 0;
+RequestsStatistics stat;
+
+void
+sig_handler(int sig_num) noexcept
+{
+	std::cout << "received signal " << sig_num << std::endl;
+	exit(0);
+}
+
+void
+set_sig_handlers() noexcept
+{
+	struct sigaction sa;
+
+	sigemptyset (&sa.sa_mask);
+	sigaddset(&sa.sa_mask, SIGHUP);
+	sigaddset(&sa.sa_mask, SIGINT);
+	sigaddset(&sa.sa_mask, SIGQUIT);
+	sigaddset(&sa.sa_mask, SIGPIPE);
+	sigaddset(&sa.sa_mask, SIGTERM);
+	sigaddset(&sa.sa_mask, SIGUSR1);
+	sigaddset(&sa.sa_mask, SIGUSR2);
+
+	sa.sa_handler = sig_handler;
+	sa.sa_flags = SA_RESTART;
+
+	sigaction(SIGHUP, &sa, NULL);
+	sigaction(SIGINT, &sa, NULL);
+	sigaction(SIGQUIT, &sa, NULL);
+	sigaction(SIGPIPE, &sa, NULL);
+	sigaction(SIGTERM, &sa, NULL);
+	sigaction(SIGUSR1, &sa, NULL);
+	sigaction(SIGUSR2, &sa, NULL);
+}
+
+void
+print_statistics()
+{
+	stat.print();
+}
+
+int
+sd_add_to_epoll(int efd, int sd)
+{
+	epoll_event ev = {};
+	ev.events = EPOLLIN;
+	ev.data.fd = sd;
+	if (epoll_ctl(efd, EPOLL_CTL_ADD, sd, &ev) < 0) {
+		std::cerr << "can't add socket " << sd << " to epoll"
+			<< std::endl;
+		return 1;
+	}
+	return 0;
+}
+
+int
+main(int argc, char *argv[])
+{
+	struct rlimit rlim;
+	if (getrlimit(RLIMIT_NOFILE, &rlim)) {
+		std::cerr << "getrlimit() failed" << std::endl;
+	} else {
+		if (rlim.rlim_cur < MAX_CONNECTIONS
+		    || rlim.rlim_max < MAX_CONNECTIONS)
+		{
+			std::cerr << "please adjust limit of open files to "
+				<< MAX_CONNECTIONS << std::endl;
+			exit(1);
+		}
+	}
+
+	set_sig_handlers();
+	atexit(print_statistics);
+
+	int listen_sd = socket(PF_INET, SOCK_STREAM, 0);
+	if (listen_sd < 0) {
+		std::cerr << "can't create listening socket" << std::endl;
+		exit(1);
+	}
+
+	struct sockaddr_in saddr = {};
+	saddr.sin_family = AF_INET;
+	saddr.sin_addr.s_addr = INADDR_ANY;
+	saddr.sin_port = htons(PORT);
+	if (bind(listen_sd, (const sockaddr *)&saddr, sizeof(saddr))) {
+		std::cerr << "can't bind at " << argv[1] << ":" << argv[2]
+			<< std::endl;
+		exit(1);
+	}
+
+	if (listen(listen_sd, 100)) {
+		std::cerr << "can't listen on socket" << std::endl;
+		exit(1);
+	}
+
+	int wd = epoll_create(1000);
+	if (wd < 0) {
+		std::cerr << "can't create epoll" << std::endl;
+		exit(1);
+	}
+
+	if (sd_add_to_epoll(wd, listen_sd))
+		exit(1);
+
+	while (1) {
+		struct epoll_event ev[64];
+		int n = epoll_wait(wd, ev, 64, -1);
+		if (n < 1) {
+			std::cerr << "epoll wait failed" << std::endl;
+			exit(1);
+		}
+
+		for (int i = 0; i < n; ++i) {
+			if (ev[i].data.fd == listen_sd) {
+				// new connection
+				int sd = accept(listen_sd, NULL, NULL);
+				if (sd < 1) {
+					std::cerr << "can't accept a socket"
+						<< std::endl;
+					exit(1);
+				}
+				if (sd_add_to_epoll(wd, sd))
+					exit(1);
+			}
+			else {
+				assert(ev[i].events & EPOLLIN);
+
+				int r = recv(ev[i].data.fd, msg, READ_SZ, 0);
+				if (!r) {
+					epoll_ctl(wd, EPOLL_CTL_DEL,
+						  ev[i].data.fd, NULL);
+					close(ev[i].data.fd);
+				} else if (r < 0) {
+					std::cerr << "failed to read on"
+						<< " socket " << ev[i].data.fd
+						<< " (ret=" << r << ")"
+						<< std::endl;
+					exit(1);
+				}
+
+				// Just do some useless work.
+				for (int j = 0; j < r / 4; ++j)
+					g_counter += msg[j];
+			}
+
+			// Update statistic on TCP haandshake, data receiving
+			// and connection shutdown.
+			stat.update();
+		}
+	}
+
+	return 0;
+}
