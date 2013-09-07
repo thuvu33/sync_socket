@@ -216,6 +216,10 @@ ss_tcp_process_connection(struct sk_buff *skb, struct sock *sk,
  * Receive data on TCP socket. Very similar to standard tcp_recvmsg().
  * Called under bh_lock_sock_nested(sk).
  *
+ * We can't use standard tcp_read_sock() with our actor callback, because
+ * tcp_read_sock() calls __kfree_skb() through sk_eat_skb() which is good
+ * for copying data from skb, but we need to manage skb's ourselves.
+ *
  * TODO:
  * -- process URG
  */
@@ -280,6 +284,9 @@ out:
  */
 /*
  * Called when a new data received on the socket.
+ *
+ * XXX ./net/ipv4/tcp_* call sk_data_ready() with 0 as the value of @bytes.
+ * This seems wrong.
  */
 void
 ss_tcp_data_ready(struct sock *sk, int bytes)

@@ -21,16 +21,23 @@ ifdef MSGSIZE
 else
 	DEFINES	= -DMSG_SZ=64
 endif
+ifdef KERNEL
+KVERSION	= $(KERNEL)
+else
+KVERSION	= $(shell uname -r)
+endif
 
 ifndef CXX
 	CXX	= g++
 endif
 
+export DEFINES
+
 TARGETS		= client server
 CFLAGS		= -O2 -std=gnu++0x -ggdb -Wall -Werror
 LDFLAGS		= -lpthread
 
-all : $(TARGETS)
+all : $(TARGETS) kernel
 
 client : client.o
 	$(CXX) $(CFLAGS) -o $@ $^ $(LDFLAGS)
@@ -38,10 +45,14 @@ client : client.o
 server : server.o
 	$(CXX) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+kernel : FORCE
+	make -C /lib/modules/$(KVERSION)/build M=$(PWD)/kernel modules
+
 %.o : %.cc $(HEADERS)
 	$(CXX) $(CFLAGS) -c $< -o $@ $(DEFINES)
 
 clean : FORCE
 	rm -f *.o $(TARGETS)
+	make -C /lib/modules/$(KVERSION)/build M=$(PWD)/kernel clean
 
 FORCE :

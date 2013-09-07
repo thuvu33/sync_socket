@@ -30,7 +30,7 @@
 
 static const size_t THR_N = 16;
 static const size_t CONNECTIONS = 128; // connections per thread
-static const size_t MESSAGES = 1024;
+static const size_t MESSAGES = 4096;
 static int msg[MSG_SZ];
 static unsigned short PORT = 5000;
 static struct sockaddr_in saddr = {};

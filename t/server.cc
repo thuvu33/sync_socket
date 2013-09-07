@@ -20,6 +20,7 @@
  */
 #include <assert.h>
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <signal.h>
@@ -30,6 +31,7 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <time.h>
+#include <unistd.h>
 
 #include <iostream>
 
@@ -80,14 +82,14 @@ static unsigned int g_counter = 0;
 RequestsStatistics stat;
 
 void
-sig_handler(int sig_num) noexcept
+sig_handler(int sig_num)
 {
 	std::cout << "received signal " << sig_num << std::endl;
 	exit(0);
 }
 
 void
-set_sig_handlers() noexcept
+set_sig_handlers()
 {
 	struct sigaction sa;
 
@@ -198,28 +200,45 @@ main(int argc, char *argv[])
 						<< std::endl;
 					exit(1);
 				}
+
+				int flags = fcntl(sd, F_GETFL, 0);
+				if (!(flags & O_NONBLOCK))
+					if(fcntl(sd, F_SETFL,
+						 flags | O_NONBLOCK) < 0)
+					{
+						std::cerr << "can't make socket"
+							<< " nonblocking"
+							<< std::endl;
+						exit(1);
+					}
+
 				if (sd_add_to_epoll(wd, sd))
 					exit(1);
 			}
 			else {
 				assert(ev[i].events & EPOLLIN);
 
-				int r = recv(ev[i].data.fd, msg, READ_SZ, 0);
-				if (!r) {
-					epoll_ctl(wd, EPOLL_CTL_DEL,
-						  ev[i].data.fd, NULL);
-					close(ev[i].data.fd);
-				} else if (r < 0) {
-					std::cerr << "failed to read on"
-						<< " socket " << ev[i].data.fd
-						<< " (ret=" << r << ")"
-						<< std::endl;
-					exit(1);
-				}
+				int r;
+				do {
+					r = recv(ev[i].data.fd, msg, READ_SZ, 0);
+					if (!r) {
+						epoll_ctl(wd, EPOLL_CTL_DEL,
+							  ev[i].data.fd, NULL);
+						close(ev[i].data.fd);
+					}
+					else if (r < 0 && errno != EAGAIN) {
+						std::cerr << "failed to read on"
+							<< " socket " << ev[i].data.fd
+							<< " (ret=" << r << ")"
+							<< std::endl;
+						exit(1);
+					}
 
-				// Just do some useless work.
-				for (int j = 0; j < r / 4; ++j)
-					g_counter += msg[j];
+					// Just do some useless work.
+					if (r > 0)
+						for (int j = 0; j < r / 4; ++j)
+							g_counter += msg[j];
+				} while (r > 0);
 			}
 
 			// Update statistic on TCP haandshake, data receiving
