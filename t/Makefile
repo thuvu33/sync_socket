@@ -26,30 +26,31 @@ KVERSION	= $(KERNEL)
 else
 KVERSION	= $(shell uname -r)
 endif
+KBUILD_EXTRA_SYMBOLS	= $(PWD)/../Module.symvers
 
 ifndef CXX
 	CXX	= g++
 endif
 
-export DEFINES
+export DEFINES KBUILD_EXTRA_SYMBOLS
 
 TARGETS		= client server
-CFLAGS		= -O2 -std=gnu++0x -ggdb -Wall -Werror
+CXXFLAGS	= -O2 -std=gnu++0x -ggdb -Wall -Werror
 LDFLAGS		= -lpthread
 
 all : $(TARGETS) kernel
 
 client : client.o
-	$(CXX) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 server : server.o
-	$(CXX) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 kernel : FORCE
 	make -C /lib/modules/$(KVERSION)/build M=$(PWD)/kernel modules
 
 %.o : %.cc $(HEADERS)
-	$(CXX) $(CFLAGS) -c $< -o $@ $(DEFINES)
+	$(CXX) $(CXXFLAGS) -c $< -o $@ $(DEFINES)
 
 clean : FORCE
 	rm -f *.o $(TARGETS)

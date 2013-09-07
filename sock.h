@@ -29,10 +29,10 @@
 /* Table of socket connection callbacks. */
 typedef struct {
 	/* New connection accepted. */
-	void (*connection_new)(struct sock *sk);
+	int (*connection_new)(struct sock *sk);
 
 	/* Drop TCP connection associated with the socket. */
-	void (*connection_drop)(struct sock *sk);
+	int (*connection_drop)(struct sock *sk);
 
 	/* Process data received on the socket. */
 	int (*connection_recv)(struct sock *sk);
@@ -47,7 +47,7 @@ typedef struct {
 	/*
 	 * Postpone the @skb into internal protocol queue.
 	 */
-	void (*postpone_skb)(SsProto *proto, struct sk_buff *skb);
+	int (*postpone_skb)(SsProto *proto, struct sk_buff *skb);
 } SsHooks;
 
 int ss_hooks_register(SsHooks* hooks);
@@ -56,8 +56,6 @@ void ss_hooks_unregister(SsHooks* hooks);
 void ss_send(struct sock *sk, struct sk_buff_head *skb_list, int len);
 
 /* TCP socket callbacks. */
-void ss_tcp_state_change(struct sock *sk);
-void ss_tcp_data_ready(struct sock *sk, int bytes);
-void ss_tcp_error(struct sock *sk);
+void ss_tcp_set_listen(struct sock *sk, SsProto *handler);
 
 #endif /* __SS_SOCK_H__ */

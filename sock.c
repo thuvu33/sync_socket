@@ -39,6 +39,8 @@ MODULE_LICENSE("GPL");
 
 static SsHooks *ss_hooks __read_mostly;
 
+#define SS_CALL(f, ...)		(ss_hooks->f ? ss_hooks->f(__VA_ARGS__) : 0)
+
 /*
  * ------------------------------------------------------------------------
  *  	Server and client connections handling
@@ -86,10 +88,9 @@ ss_send(struct sock *sk, struct sk_buff_head *skb_list, int len)
 	tcb->end_seq += len;
 	tp->write_seq += len;
 
-	SS_DBG("%s:%d tp->early_retrans_delayed=%d is_queue_empty=%d"
-	       " tcp_send_head(sk)=%p sk->sk_state=%d\n",
-	       __FUNCTION__, __LINE__, tp->early_retrans_delayed,
-	       tcp_write_queue_empty(sk), tcp_send_head(sk), sk->sk_state);
+	SS_DBG("%s:%d is_queue_empty=%d tcp_send_head(sk)=%p sk->sk_state=%d\n",
+	       __FUNCTION__, __LINE__, tcp_write_queue_empty(sk),
+	       tcp_send_head(sk), sk->sk_state);
 
 	tcp_push(sk, flags, mss_now, TCP_NAGLE_OFF|TCP_NAGLE_PUSH);
 }
@@ -125,11 +126,10 @@ ss_tcp_process_skb(struct sk_buff *skb, struct sock *sk, unsigned int off,
 	int lin_len = skb_headlen(skb);
 	struct sk_buff *frag_i;
 
-	BUG_ON(!ss_hooks->put_skb_to_msg);
-
 	/* Process linear data. */
 	if (off < lin_len) {
-		ss_hooks->put_skb_to_msg(proto, skb);
+		if (ss_hooks->put_skb_to_msg)
+			ss_hooks->put_skb_to_msg(proto, skb);
 
 		r = ss_tcp_process_proto_skb(proto, skb->data + off,
 					     lin_len - off, skb);
@@ -148,7 +148,8 @@ ss_tcp_process_skb(struct sk_buff *skb, struct sock *sk, unsigned int off,
 			struct page *page = skb_frag_page(frag);
 			unsigned char *vaddr = kmap(page);
 
-			ss_hooks->put_skb_to_msg(proto, skb);
+			if (ss_hooks->put_skb_to_msg)
+				ss_hooks->put_skb_to_msg(proto, skb);
 
 			r = ss_tcp_process_proto_skb(proto, vaddr + off,
 						     f_sz - off, skb);
@@ -176,6 +177,17 @@ ss_tcp_process_skb(struct sk_buff *skb, struct sock *sk, unsigned int off,
 	return r;
 }
 
+static void
+ss_tcp_close(struct sock *sk)
+{
+	SS_CALL(connection_drop, sk);
+	if (sk->sk_destruct) {
+		sk->sk_destruct(sk);
+		/* Don't call the destructor any more from Lunux TCP calls. */
+		sk->sk_destruct = NULL;
+	}
+}
+
 /**
  * Process received data on the socket.
  * @return SS_OK, SS_DROP or negative value of error code.
@@ -189,12 +201,9 @@ ss_tcp_process_connection(struct sk_buff *skb, struct sock *sk,
 	int r;
 	SsProto *proto = sk->sk_user_data;
 
-	BUG_ON(!ss_hooks->connection_recv);
-	BUG_ON(!ss_hooks->connection_drop);
-
-	r = ss_hooks->connection_recv(sk);
+	r = SS_CALL(connection_recv, sk);
 	if (r) {
-		ss_hooks->connection_drop(sk);
+		ss_tcp_close(sk);
 		return r;
 	}
 
@@ -206,7 +215,7 @@ ss_tcp_process_connection(struct sk_buff *skb, struct sock *sk,
 		 * Drop connection on internal errors as well as
 		 * on banned packets.
 		 */
-		ss_hooks->connection_drop(sk);
+		ss_tcp_close(sk);
 	}
 
 	return r;
@@ -288,7 +297,7 @@ out:
  * XXX ./net/ipv4/tcp_* call sk_data_ready() with 0 as the value of @bytes.
  * This seems wrong.
  */
-void
+static void
 ss_tcp_data_ready(struct sock *sk, int bytes)
 {
 	if (!skb_queue_empty(&sk->sk_error_queue)) {
@@ -313,33 +322,11 @@ ss_tcp_data_ready(struct sock *sk, int bytes)
 		}
 	}
 }
-EXPORT_SYMBOL(ss_tcp_data_ready);
-
-/**
- * Socket state change callback.
- */
-void
-ss_tcp_state_change(struct sock *sk)
-{
-	if (sk->sk_state == TCP_ESTABLISHED) {
-		BUG_ON(!ss_hooks->connection_new);
-
-		ss_hooks->connection_new(sk);
-	}
-	else if (sk->sk_state == TCP_CLOSE_WAIT) {
-		/* Connection has closed. */
-		SS_DBG("connection closed on socket %p\n", sk);
-
-		if (sk->sk_destruct)
-			sk->sk_destruct(sk);
-	}
-}
-EXPORT_SYMBOL(ss_tcp_state_change);
 
 /**
  * Socket failover.
  */
-void
+static void
 ss_tcp_error(struct sock *sk)
 {
 	SS_DBG("process error on socket %p\n", sk);
@@ -347,7 +334,44 @@ ss_tcp_error(struct sock *sk)
 	if (sk->sk_destruct)
 		sk->sk_destruct(sk);
 }
-EXPORT_SYMBOL(ss_tcp_error);
+
+/**
+ * Socket state change callback.
+ */
+static void
+ss_tcp_state_change(struct sock *sk)
+{
+	if (sk->sk_state == TCP_ESTABLISHED) {
+		SS_CALL(connection_new, sk);
+
+		/*
+		 * Set socket callbask for new data socket.
+		 * A user could set the callbacks already,
+		 * so we set a standard callback only if it's NULL.
+		 */
+		if (!sk->sk_data_ready)
+			sk->sk_data_ready = ss_tcp_data_ready;
+		if (!sk->sk_state_change)
+			sk->sk_state_change = ss_tcp_state_change;
+		if (!sk->sk_error_report)
+			sk->sk_error_report = ss_tcp_error;
+	}
+	else if (sk->sk_state == TCP_CLOSE_WAIT) {
+		/* Connection has closed. */
+		SS_DBG("connection closed on socket %p\n", sk);
+		ss_tcp_close(sk);
+	}
+}
+
+void
+ss_tcp_set_listen(struct sock *sk, SsProto *handler)
+{
+	BUG_ON(sk->sk_user_data);
+
+	sk->sk_state_change = ss_tcp_state_change;
+	sk->sk_user_data = handler;
+}
+EXPORT_SYMBOL(ss_tcp_set_listen);
 
 /*
  * ------------------------------------------------------------------------
@@ -356,7 +380,7 @@ EXPORT_SYMBOL(ss_tcp_error);
  */
 
 /*
- * Only one user for now, don't care about registration races.
+ * FIXME Only one user for now, don't care about registration races.
  */
 int
 ss_hooks_register(SsHooks* hooks)

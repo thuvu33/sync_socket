@@ -4,11 +4,6 @@
  * Generic protocols handling for session, presentation and application
  * (l5-l7) levels.
  *
- * Only one protocol (HTTP) family is currently supported, so all the handlers
- * are called unconditionaly. If other protoclols are added, then calling and
- * registering routines must be reworked to be port and type of transport
- * protocol aware.
- *
  * Copyright (C) 2012-2013 NatSys Lab. (info@natsys-lab.com).
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -67,7 +62,6 @@ ss_proto_run_handlers(SsProto *proto, unsigned char *data, size_t len)
 
 	return ret;
 }
-EXPORT_SYMBOL(ss_proto_run_handlers);
 
 /**
  * Register new application protocol handler.
