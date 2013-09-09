@@ -63,16 +63,16 @@ static struct socket *conn[MAX_CONN] = { NULL };
 MODULE_LICENSE("GPL");
 
 static void
-stat_update(void)
+stat_update(int events)
 {
 	spin_lock(&stat_lock);
 	if (last_ts == jiffies / HZ) {
-		pps_curr++;
+		pps_curr += events;
 	} else {
 		// recahrge
 		if (pps_curr > pps_max)
 			pps_max = pps_curr;
-		pps_curr = 1;
+		pps_curr = events;
 		last_ts = jiffies / HZ;
 	}
 	spin_unlock(&stat_lock);
@@ -82,13 +82,13 @@ void
 stat_print(void)
 {
 	printk(KERN_ERR "Best rps: %u\n",
-	       pps_curr > pps_max ? pps_curr : pps_max);
+	       (pps_curr > pps_max ? pps_curr : pps_max) / READ_SZ);
 }
 
 static void
 kserver_do_socket_read(struct socket *sock)
 {
-	int r;
+	int r, count = 0;
 	do {
 	        struct msghdr msg = {
 			.msg_flags = MSG_DONTWAIT | MSG_NOSIGNAL
@@ -102,11 +102,12 @@ kserver_do_socket_read(struct socket *sock)
 			int i;
 			for (i = 0; i < r / 4; ++i)
 				g_counter += msg_buf[i];
-
-			stat_update();
+			count += r;
 		} else if (r != -EAGAIN)
 			printk(KERN_ERR "error (%d) on socket %p\n", r, sock);
 	} while (r > 0);
+
+	stat_update(count);
 }
 
 static void
@@ -161,7 +162,7 @@ kserver_state_change(struct sock *sk)
 
 	switch (sk->sk_state) {
 	case TCP_CLOSE:
-		stat_update();
+		stat_update(READ_SZ);
 	default:
 		break;
 	}
@@ -220,7 +221,7 @@ kserver_accept_worker(struct work_struct *work)
 	BUG_ON(sw->sk != listen_sock);
 
 	while (!kserver_accept(sw->sk)) {
-		stat_update();
+		stat_update(READ_SZ);
 		cond_resched();
 	}
 

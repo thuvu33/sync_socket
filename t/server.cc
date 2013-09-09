@@ -35,6 +35,9 @@
 
 #include <iostream>
 
+static const size_t MAX_CONNECTIONS = 1000 * 1000;
+static const int READ_SZ = MSG_SZ * sizeof(int);
+
 /**
  * Counts number of requests per second and prints the best one.
  */
@@ -47,16 +50,16 @@ public:
 	{}
 
 	void
-	update()
+	update(int events)
 	{
 		time_t t = time(NULL);
 		if (last_ts_ == t) {
-			curr_++;
+			curr_ += events;
 		} else {
 			// recahrge
 			if (curr_ > max_)
 				max_ = curr_;
-			curr_ = 1;
+			curr_ = events;
 			last_ts_ = t;
 		}
 	}
@@ -64,7 +67,7 @@ public:
 	void
 	print()
 	{
-		std::cout << "Best rps: " << std::max(max_, curr_)
+		std::cout << "Best rps: " << (std::max(max_, curr_) / READ_SZ)
 			<< std::endl;
 	}
 
@@ -74,8 +77,6 @@ private:
 	unsigned int max_;
 };
 
-static const size_t MAX_CONNECTIONS = 1000 * 1000;
-static const int READ_SZ = MSG_SZ * sizeof(int);
 static unsigned short PORT = 5000;
 static int msg[MSG_SZ];
 static unsigned int g_counter = 0;
@@ -214,17 +215,20 @@ main(int argc, char *argv[])
 
 				if (sd_add_to_epoll(wd, sd))
 					exit(1);
+			
+				stat.update(READ_SZ);
 			}
 			else {
 				assert(ev[i].events & EPOLLIN);
 
-				int r;
+				int count = 0, r;
 				do {
 					r = recv(ev[i].data.fd, msg, READ_SZ, 0);
 					if (!r) {
 						epoll_ctl(wd, EPOLL_CTL_DEL,
 							  ev[i].data.fd, NULL);
 						close(ev[i].data.fd);
+						count = READ_SZ;
 					}
 					else if (r < 0 && errno != EAGAIN) {
 						std::cerr << "failed to read on"
@@ -235,15 +239,15 @@ main(int argc, char *argv[])
 					}
 
 					// Just do some useless work.
-					if (r > 0)
+					if (r > 0) {
 						for (int j = 0; j < r / 4; ++j)
 							g_counter += msg[j];
+						count += r;
+					}
 				} while (r > 0);
-			}
 
-			// Update statistic on TCP haandshake, data receiving
-			// and connection shutdown.
-			stat.update();
+				stat.update(count);
+			}
 		}
 	}
 

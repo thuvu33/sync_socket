@@ -57,5 +57,6 @@ void ss_send(struct sock *sk, struct sk_buff_head *skb_list, int len);
 
 /* TCP socket callbacks. */
 void ss_tcp_set_listen(struct sock *sk, SsProto *handler);
+void ss_sock_release(struct sock *sk);
 
 #endif /* __SS_SOCK_H__ */

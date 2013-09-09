@@ -31,6 +31,7 @@
 
 #define MAX_CONN	(1000 * 1000)
 #define PORT		5000
+#define READ_SZ		(MSG_SZ * sizeof(int))
 
 /* Application logic class inherited from SsProto. */
 typedef struct {
@@ -48,31 +49,30 @@ static DEFINE_SPINLOCK(stat_lock);
 static int g_counter;
 
 static atomic_t conn_i = ATOMIC_INIT(0);
-static struct socket *conn[MAX_CONN] = { NULL };
+static struct sock *conn[MAX_CONN] = { NULL };
 
 MODULE_LICENSE("GPL");
 
 static void
-stat_update(void)
+stat_update(int events)
 {
-	spin_lock(&stat_lock);
+	/* Only one softirq context, so no synchronization is needed. */
 	if (last_ts == jiffies / HZ) {
-		pps_curr++;
+		pps_curr += events;
 	} else {
 		// recahrge
 		if (pps_curr > pps_max)
 			pps_max = pps_curr;
-		pps_curr = 1;
+		pps_curr = events;
 		last_ts = jiffies / HZ;
 	}
-	spin_unlock(&stat_lock);
 }
 
 void
 stat_print(void)
 {
 	printk(KERN_ERR "Best rps: %u\n",
-	       pps_curr > pps_max ? pps_curr : pps_max);
+	       (pps_curr > pps_max ? pps_curr : pps_max) / READ_SZ);
 }
 
 /*
@@ -85,7 +85,7 @@ kserver_read(void *proto, unsigned char *data, size_t len)
 	for (i = 0; i < len / 4; ++i)
 		g_counter += data[i];
 
-	stat_update();
+	stat_update(len);
 
 	return 0;
 }
@@ -102,10 +102,12 @@ kserver_connection_new(struct sock *sock)
 	/* Write the socket to free it as module exit. */
 	ci = atomic_inc_return(&conn_i);
 	if (ci < MAX_CONN) {
-		conn[ci] = sock->sk_socket;
+		conn[ci] = sock;
 	} else {
 		printk(KERN_ERR "Too many connections!\n");
 	}
+
+	stat_update(READ_SZ);
 
 	return 0;
 }
@@ -113,7 +115,7 @@ kserver_connection_new(struct sock *sock)
 static int
 kserver_connection_drop(struct sock *sk)
 {
-	stat_update();
+	stat_update(READ_SZ);
 
 	return 0;
 }
@@ -180,10 +182,16 @@ kserver_exit(void)
 {
 	int ci;
 
+	/*
+	 * FIXME here we get WARNING:
+	 * "IPv4: Attempt to release alive inet socket"
+	 */
+#if 0
 	sock_release(listen_sock);
+#endif
 	for (ci = 0; ci < atomic_read(&conn_i); ++ci)
 		if (conn[ci])
-			sock_release(conn[ci]);
+			ss_sock_release(conn[ci]);
 
 	stat_print();
 }
