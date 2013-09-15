@@ -160,13 +160,21 @@ main(int argc, char *argv[])
 		exit(1);
 	}
 
+	static const int on = 1;
+	if (setsockopt(listen_sd, SOL_SOCKET, SO_REUSEADDR, (char *)&on,
+		       sizeof(on)) < 0)
+	{
+		std::cerr << "can't set reuseaddr for listenong socket"
+			<< std::endl;
+		exit(1);
+	}
+
 	struct sockaddr_in saddr = {};
 	saddr.sin_family = AF_INET;
 	saddr.sin_addr.s_addr = INADDR_ANY;
 	saddr.sin_port = htons(PORT);
 	if (bind(listen_sd, (const sockaddr *)&saddr, sizeof(saddr))) {
-		std::cerr << "can't bind at " << argv[1] << ":" << argv[2]
-			<< std::endl;
+		std::cerr << "can't bind listening socket " << std::endl;
 		exit(1);
 	}
 
@@ -195,6 +203,7 @@ main(int argc, char *argv[])
 		for (int i = 0; i < n; ++i) {
 			if (ev[i].data.fd == listen_sd) {
 				// new connection
+				// XXX no accept optimization
 				int sd = accept(listen_sd, NULL, NULL);
 				if (sd < 1) {
 					std::cerr << "can't accept a socket"
