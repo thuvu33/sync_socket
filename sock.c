@@ -364,8 +364,6 @@ ss_drain_accept_queue(struct sock *lsk, struct sock *nsk)
 static void
 ss_tcp_data_ready(struct sock *sk, int bytes)
 {
-	int processed = 0;
-
 	if (!skb_queue_empty(&sk->sk_error_queue)) {
 		/*
 		 * Error packet received.

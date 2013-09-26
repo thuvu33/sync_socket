@@ -28,6 +28,12 @@
 /**
  * Execute all l5-l7 protocol handlers.
  * @return number of processed bytes at session (l5) level or error code.
+ *
+ * TODO Currently protocol handlers are executed only for reading, so say
+ * application protocol is getting exactly the same message as presentation
+ * protocol just processed. The hadnlers must be able to adjust the messages.
+ * Also they should accept some session object to do their work (e.g. crypto
+ * context for SSL layer).
  */
 int
 ss_proto_run_handlers(SsProto *proto, unsigned char *data, size_t len)
@@ -71,6 +77,7 @@ ss_proto_push_handler(SsProto *proto, ss_proto_hndl_t handler)
 {
 	int i = 0;
 	while (i < SS_MAX_PROTO_STACK_N && proto->handlers[i])
+		/* FIXME must be atomic */
 		++i;
 	BUG_ON(i == SS_MAX_PROTO_STACK_N);
 

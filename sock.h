@@ -54,6 +54,7 @@ int ss_hooks_register(SsHooks* hooks);
 void ss_hooks_unregister(SsHooks* hooks);
 
 void ss_send(struct sock *sk, struct sk_buff_head *skb_list, int len);
+/* TODO ss_close() */
 
 /* TCP socket callbacks. */
 void ss_tcp_set_listen(struct sock *sk, SsProto *handler);

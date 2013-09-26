@@ -28,7 +28,7 @@ do {									\
 	printk(KERN_ERR SS_BANNER "  " __VA_ARGS__);			\
 } while (0)
 #else
-#define SS_DBG
+#define SS_DBG(...)
 #endif
 
 #define SS_LOG(...)							\

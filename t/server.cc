@@ -135,6 +135,83 @@ sd_add_to_epoll(int efd, int sd)
 	return 0;
 }
 
+void
+set_nonblock(int sd, const char *desc)
+{
+	int flags = fcntl(sd, F_GETFL, 0);
+	if (!(flags & O_NONBLOCK))
+		if(fcntl(sd, F_SETFL, flags | O_NONBLOCK) < 0) {
+			std::cerr << "can't make " << desc
+				<< " socket nonblocking" << std::endl;
+			exit(1);
+		}
+}
+
+void
+work_loop(int listen_sd, int wd)
+{
+	struct epoll_event ev[64];
+	int n = epoll_wait(wd, ev, 64, -1);
+	if (n < 1) {
+		std::cerr << "epoll wait failed" << std::endl;
+		exit(1);
+	}
+
+	for (int i = 0; i < n; ++i) {
+		if (ev[i].data.fd == listen_sd) {
+			// Process new connection.
+			while (1) {
+				int sd = accept(listen_sd, NULL, NULL);
+				if (sd < 1) {
+					if (errno == EAGAIN)
+						break;
+					std::cerr << "can't accept a socket"
+						<< std::endl;
+					exit(1);
+				}
+
+				set_nonblock(sd, "work");
+
+				if (sd_add_to_epoll(wd, sd))
+					exit(1);
+		
+				stat.update(READ_SZ);
+			}
+		}
+		else {
+			// Process data on established connections.
+			assert(ev[i].events & EPOLLIN);
+
+			int count = 0, r;
+			do {
+				r = recv(ev[i].data.fd, msg, READ_SZ, 0);
+				if (!r) {
+					epoll_ctl(wd, EPOLL_CTL_DEL,
+					  ev[i].data.fd, NULL);
+					close(ev[i].data.fd);
+					count = READ_SZ;
+				}
+				else if (r < 0 && errno != EAGAIN) {
+					std::cerr << "failed to read on"
+						<< " socket " << ev[i].data.fd
+						<< " (ret=" << r << ")"
+						<< std::endl;
+					exit(1);
+				}
+
+				// Just do some useless work.
+				if (r > 0) {
+					for (int j = 0; j < r / 4; ++j)
+						g_counter += msg[j];
+					count += r;
+				}
+			} while (r > 0);
+
+			stat.update(count);
+		}
+	}
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -178,10 +255,16 @@ main(int argc, char *argv[])
 		exit(1);
 	}
 
-	if (listen(listen_sd, 100)) {
+	/*
+	 * XXX set /proc/sys/net/core/somaxconn also to 1000.
+	 * See listen(2).
+	 */
+	if (listen(listen_sd, 1000)) {
 		std::cerr << "can't listen on socket" << std::endl;
 		exit(1);
 	}
+
+	set_nonblock(listen_sd, "listen");
 
 	int wd = epoll_create(1000);
 	if (wd < 0) {
@@ -192,73 +275,8 @@ main(int argc, char *argv[])
 	if (sd_add_to_epoll(wd, listen_sd))
 		exit(1);
 
-	while (1) {
-		struct epoll_event ev[64];
-		int n = epoll_wait(wd, ev, 64, -1);
-		if (n < 1) {
-			std::cerr << "epoll wait failed" << std::endl;
-			exit(1);
-		}
-
-		for (int i = 0; i < n; ++i) {
-			if (ev[i].data.fd == listen_sd) {
-				// new connection
-				// XXX no accept optimization
-				int sd = accept(listen_sd, NULL, NULL);
-				if (sd < 1) {
-					std::cerr << "can't accept a socket"
-						<< std::endl;
-					exit(1);
-				}
-
-				int flags = fcntl(sd, F_GETFL, 0);
-				if (!(flags & O_NONBLOCK))
-					if(fcntl(sd, F_SETFL,
-						 flags | O_NONBLOCK) < 0)
-					{
-						std::cerr << "can't make socket"
-							<< " nonblocking"
-							<< std::endl;
-						exit(1);
-					}
-
-				if (sd_add_to_epoll(wd, sd))
-					exit(1);
-			
-				stat.update(READ_SZ);
-			}
-			else {
-				assert(ev[i].events & EPOLLIN);
-
-				int count = 0, r;
-				do {
-					r = recv(ev[i].data.fd, msg, READ_SZ, 0);
-					if (!r) {
-						epoll_ctl(wd, EPOLL_CTL_DEL,
-							  ev[i].data.fd, NULL);
-						close(ev[i].data.fd);
-						count = READ_SZ;
-					}
-					else if (r < 0 && errno != EAGAIN) {
-						std::cerr << "failed to read on"
-							<< " socket " << ev[i].data.fd
-							<< " (ret=" << r << ")"
-							<< std::endl;
-						exit(1);
-					}
-
-					// Just do some useless work.
-					if (r > 0) {
-						for (int j = 0; j < r / 4; ++j)
-							g_counter += msg[j];
-						count += r;
-					}
-				} while (r > 0);
-
-				stat.update(count);
-			}
-		}
-	}
+	while (1)
+		work_loop(listen_sd, wd);
 
 	return 0;
 }
