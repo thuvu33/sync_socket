@@ -29,11 +29,20 @@
  * Execute all l5-l7 protocol handlers.
  * @return number of processed bytes at session (l5) level or error code.
  *
- * TODO Currently protocol handlers are executed only for reading, so say
- * application protocol is getting exactly the same message as presentation
- * protocol just processed. The hadnlers must be able to adjust the messages.
- * Also they should accept some session object to do their work (e.g. crypto
- * context for SSL layer).
+ * TODO
+ * 1.	Currently protocol handlers are executed only for reading, so say
+ *	application protocol is getting exactly the same message as presentation
+ *	protocol just processed. The hadnlers must be able to adjust
+ *	the messages. Also they should accept some session object to do their
+ *	work (e.g. crypto context for SSL layer).
+ *
+ * 2.	Client side protohandlers also must be implemented, i.e. we should be
+ *	able to connect to peer with some callback on reading (exactly as it is
+ *	for server side). Connect must be asynchronous operation with on_connect
+ *	callback.
+ *
+ * 3.	The system must support number of protocol stacks simultaneously,
+ * 	so no static variables should be used.
  */
 int
 ss_proto_run_handlers(SsProto *proto, unsigned char *data, size_t len)

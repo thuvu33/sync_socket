@@ -81,7 +81,7 @@ stat_update(int events)
 void
 stat_print(void)
 {
-	printk(KERN_ERR "Best rps: %u\n",
+	printk(KERN_ERR "Best rps: %lu\n",
 	       (pps_curr > pps_max ? pps_curr : pps_max) / READ_SZ);
 }
 

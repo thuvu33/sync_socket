@@ -44,7 +44,6 @@ static MyProto my_proto;
 /* Statistics */
 static long last_ts = 0;
 static unsigned int pps_curr = 0, pps_max = 0;
-static DEFINE_SPINLOCK(stat_lock);
 
 static int g_counter;
 
@@ -71,7 +70,7 @@ stat_update(int events)
 void
 stat_print(void)
 {
-	printk(KERN_ERR "Best rps: %u\n",
+	printk(KERN_ERR "Best rps: %lu\n",
 	       (pps_curr > pps_max ? pps_curr : pps_max) / READ_SZ);
 }
 
@@ -182,16 +181,19 @@ kserver_exit(void)
 {
 	int ci;
 
-	/*
-	 * FIXME here we get WARNING:
-	 * "IPv4: Attempt to release alive inet socket"
-	 */
-#if 0
 	sock_release(listen_sock);
-#endif
+
 	for (ci = 0; ci < atomic_read(&conn_i); ++ci)
 		if (conn[ci])
-			ss_sock_release(conn[ci]);
+			ss_close(conn[ci]);
+
+	/*
+	 * FIXME at this point the module can crash if there is some active
+	 * softirq processing the sockets which are calling ssocket_hooks
+	 * callbacks.
+	 */
+
+	ss_hooks_unregister(&ssocket_hooks);
 
 	stat_print();
 }

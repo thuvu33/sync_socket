@@ -24,12 +24,13 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #include <iostream>
 #include <thread>
 
 static const size_t THR_N = 16;
-static const size_t CONNECTIONS = 128; // connections per thread
+static const size_t CONNECTIONS = 64; // connections per thread
 static const size_t MESSAGES = 4096;
 static int msg[MSG_SZ];
 static unsigned short PORT = 5000;

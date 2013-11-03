@@ -35,7 +35,7 @@
 
 MODULE_AUTHOR("NatSys Lab. (http://natsys-lab.com)");
 MODULE_DESCRIPTION("Linux Kernel Synchronous Sockets");
-MODULE_VERSION("0.1.1");
+MODULE_VERSION("0.2.0");
 MODULE_LICENSE("GPL");
 
 static SsHooks *ss_hooks __read_mostly;
@@ -175,18 +175,177 @@ ss_tcp_process_skb(struct sk_buff *skb, struct sock *sk, unsigned int off,
 	return r;
 }
 
+/**
+ * inet_release() can sleep (as well as tcp_close()), so we make our own
+ * non-sleepable socket closing.
+ *
+ * This function must be used only for data sockets.
+ * Use standard sock_release() for listening sockets.
+ *
+ * In most cases it's called from softirq and from softirqd which processes data
+ * from the socket (RSS and RPS distributes packets in such way).
+ * However, it also can be called from process context,
+ * e.g. on module unloading.
+ *
+ * TODO In some cases we need to close socket agresively w/o FIN_WAIT_2 state,
+ * e.g. by sending RST. So we need to add second parameter to the function
+ * which says how to close the socket.
+ * See tcp_sk(sk)->linger2 processing in standard tcp_close().
+ */
 static void
-ss_tcp_close(struct sock *sk)
+ss_do_close(struct sock *sk)
 {
+	struct sk_buff *skb;
+	int data_was_unread = 0;
+	int state;
+
+	if (unlikely(!sk))
+		return;
+	BUG_ON(sk->sk_state == TCP_LISTEN);
+
 	SS_CALL(connection_drop, sk);
-#if 0
-	if (sk->sk_destruct) {
-		sk->sk_destruct(sk);
-		/* Don't call the destructor any more from Lunux TCP calls. */
-		sk->sk_destruct = NULL;
+
+	sock_rps_reset_flow(sk);
+
+	/*
+	 * Sanity checks.
+	 */
+	/* We must return immediately, so LINGER option is meaningless. */
+	WARN_ON(sock_flag(sk, SOCK_LINGER));
+	/* We don't support virtual containers, so TCP_REPAIR is prohibited. */
+	WARN_ON(tcp_sk(sk)->repair);
+	/* The socket must have atomic allocation mask. */
+	WARN_ON(!(sk->sk_allocation & GFP_ATOMIC));
+
+	/*
+	 * The below is mostly copy-paste from tcp_close().
+	 */
+	sk->sk_shutdown = SHUTDOWN_MASK;
+
+	while ((skb = __skb_dequeue(&sk->sk_receive_queue)) != NULL) {
+		u32 len = TCP_SKB_CB(skb)->end_seq - TCP_SKB_CB(skb)->seq -
+			  tcp_hdr(skb)->fin;
+		data_was_unread += len;
+		__kfree_skb(skb);
 	}
-#endif
+
+	sk_mem_reclaim(sk);
+
+	if (sk->sk_state == TCP_CLOSE)
+		goto adjudge_to_death;
+
+	if (data_was_unread) {
+		NET_INC_STATS_USER(sock_net(sk), LINUX_MIB_TCPABORTONCLOSE);
+		tcp_set_state(sk, TCP_CLOSE);
+		tcp_send_active_reset(sk, sk->sk_allocation);
+	}
+	else if (tcp_close_state(sk)) {
+		/* The code below is taken from tcp_send_fin(). */
+		struct tcp_sock *tp = tcp_sk(sk);
+		struct sk_buff *skb = tcp_write_queue_tail(sk);
+		int mss_now = tcp_current_mss(sk);
+
+		if (tcp_send_head(sk) != NULL) {
+			/* Send FIN with data if we have any. */
+			TCP_SKB_CB(skb)->tcp_flags |= TCPHDR_FIN;
+			TCP_SKB_CB(skb)->end_seq++;
+			tp->write_seq++;
+		}
+		else {
+			/* No data to send in the socket, allocate new skb. */
+			skb = alloc_skb_fclone(MAX_TCP_HEADER,
+					       sk->sk_allocation);
+			if (!skb) {
+				SS_WARN("can't send FIN due to bad alloc");
+			} else {
+				skb_reserve(skb, MAX_TCP_HEADER);
+				tcp_init_nondata_skb(skb, tp->write_seq,
+						     TCPHDR_ACK | TCPHDR_FIN);
+				tcp_queue_skb(sk, skb);
+			}
+		}
+		__tcp_push_pending_frames(sk, mss_now, TCP_NAGLE_OFF);
+	}
+
+adjudge_to_death:
+	state = sk->sk_state;
+	sock_hold(sk);
+	sock_orphan(sk);
+
+	/*
+	 * release_sock(sk) w/o sleeping.
+	 *
+	 * We're in softirq and there is no other socket users,
+	 * so don't acquire sk->sk_lock.
+	 */
+	if (sk->sk_backlog.tail) {
+		struct sk_buff *skb = sk->sk_backlog.head;
+		do {
+			sk->sk_backlog.head = sk->sk_backlog.tail = NULL;
+			do {
+				struct sk_buff *next = skb->next;
+				prefetch(next);
+				WARN_ON_ONCE(skb_dst_is_noref(skb));
+				/*
+				 * We're in active closing state,
+				 * so there is nobody interesting in receiving
+				 * data.
+				 */
+				__kfree_skb(skb);
+				skb = next;
+			} while (skb != NULL);
+		} while ((skb = sk->sk_backlog.head) != NULL);
+	}
+	sk->sk_backlog.len = 0;
+	if (sk->sk_prot->release_cb)
+		sk->sk_prot->release_cb(sk);
+	sk->sk_lock.owned = 0;
+
+	percpu_counter_inc(sk->sk_prot->orphan_count);
+
+	if (state != TCP_CLOSE && sk->sk_state == TCP_CLOSE)
+		return;
+
+	if (sk->sk_state == TCP_FIN_WAIT2) {
+		const int tmo = tcp_fin_time(sk);
+		if (tmo > TCP_TIMEWAIT_LEN) {
+			inet_csk_reset_keepalive_timer(sk,
+						tmo - TCP_TIMEWAIT_LEN);
+		} else {
+			tcp_time_wait(sk, TCP_FIN_WAIT2, tmo);
+			return;
+		}
+	}
+	if (sk->sk_state != TCP_CLOSE) {
+		sk_mem_reclaim(sk);
+		if (tcp_check_oom(sk, 0)) {
+			tcp_set_state(sk, TCP_CLOSE);
+			tcp_send_active_reset(sk, GFP_ATOMIC);
+			NET_INC_STATS_BH(sock_net(sk),
+					 LINUX_MIB_TCPABORTONMEMORY);
+		}
+	}
+	if (sk->sk_state == TCP_CLOSE) {
+		struct request_sock *req = tcp_sk(sk)->fastopen_rsk;
+		if (req != NULL)
+			reqsk_fastopen_remove(sk, req, false);
+		inet_csk_destroy_sock(sk);
+	}
 }
+
+void
+ss_close(struct sock *sk)
+{
+	local_bh_disable();
+	bh_lock_sock_nested(sk);
+
+	ss_do_close(sk);
+
+	bh_unlock_sock(sk);
+	local_bh_enable();
+	sock_put(sk);
+}
+EXPORT_SYMBOL(ss_close);
 
 /**
  * Process received data on the socket.
@@ -203,7 +362,7 @@ ss_tcp_process_connection(struct sk_buff *skb, struct sock *sk,
 
 	r = SS_CALL(connection_recv, sk);
 	if (r) {
-		ss_tcp_close(sk);
+		ss_do_close(sk);
 		return r;
 	}
 
@@ -215,7 +374,7 @@ ss_tcp_process_connection(struct sk_buff *skb, struct sock *sk,
 		 * Drop connection on internal errors as well as
 		 * on banned packets.
 		 */
-		ss_tcp_close(sk);
+		ss_do_close(sk);
 	}
 
 	return r;
@@ -223,7 +382,6 @@ ss_tcp_process_connection(struct sk_buff *skb, struct sock *sk,
 
 /**
  * Receive data on TCP socket. Very similar to standard tcp_recvmsg().
- * Called under bh_lock_sock_nested(sk).
  *
  * We can't use standard tcp_read_sock() with our actor callback, because
  * tcp_read_sock() calls __kfree_skb() through sk_eat_skb() which is good
@@ -245,7 +403,7 @@ ss_tcp_process_data(struct sock *sk)
 			SS_WARN("recvmsg bug: TCP sequence gap at seq %X"
 				" recvnxt %X\n",
 				tp->copied_seq, TCP_SKB_CB(skb)->seq);
-			/* TODO drop the connection */
+			ss_do_close(sk);
 			return;
 		}
 
@@ -271,8 +429,9 @@ ss_tcp_process_data(struct sock *sk)
 			__kfree_skb(skb);
 		}
 		else if (tcp_hdr(skb)->fin) {
+			SS_DBG("received FIN, do active close\n");
 			++tp->copied_seq;
-			/* TODO close the connection */
+			ss_do_close(sk);
 			__kfree_skb(skb);
 		}
 		else {
@@ -302,7 +461,11 @@ ss_drain_accept_queue(struct sock *lsk, struct sock *nsk)
 {
 	struct inet_connection_sock *icsk = inet_csk(lsk);
 	struct request_sock_queue *queue = &icsk->icsk_accept_queue;
+#if 0
 	struct request_sock *prev_r, *req;
+#else
+	struct request_sock *req;
+#endif
 
 	/* Currently we process TCP only. */
 	BUG_ON(lsk->sk_protocol != IPPROTO_TCP);
@@ -357,6 +520,7 @@ ss_drain_accept_queue(struct sock *lsk, struct sock *nsk)
  */
 /*
  * Called when a new data received on the socket.
+ * Called under bh_lock_sock_nested(sk) (see tcp_v4_rcv()).
  *
  * XXX ./net/ipv4/tcp_* call sk_data_ready() with 0 as the value of @bytes.
  * This seems wrong.
@@ -395,12 +559,17 @@ ss_tcp_error(struct sock *sk)
 {
 	SS_DBG("process error on socket %p\n", sk);
 
-	write_lock_bh(&sk->sk_callback_lock);
-
 	if (sk->sk_destruct)
 		sk->sk_destruct(sk);
+}
 
-	write_unlock_bh(&sk->sk_callback_lock);
+/**
+ * We're working with the sockets in softirq, so set allocations atomic.
+ */
+static void
+ss_set_sock_atomic_alloc(struct sock *sk)
+{
+	sk->sk_allocation = GFP_ATOMIC;
 }
 
 /**
@@ -409,20 +578,24 @@ ss_tcp_error(struct sock *sk)
 static void
 ss_tcp_state_change(struct sock *sk)
 {
-	write_lock_bh(&sk->sk_callback_lock);
-
 	if (sk->sk_state == TCP_ESTABLISHED) {
+		/* Process the new TCP connection. */
+
 		SsProto *proto = sk->sk_user_data;
 		struct sock *lsk = proto->listener;
 		BUG_ON(!lsk);
 
+		ss_set_sock_atomic_alloc(sk);
+
 		/* The callback is called from tcp_rcv_state_process(). */
 		SS_CALL(connection_new, sk);
 
-		/* Set socket callbask for new data socket. */
+		/* Set socket callbaks for new data socket. */
+		write_lock_bh(&sk->sk_callback_lock);
 		sk->sk_data_ready = ss_tcp_data_ready;
 		sk->sk_state_change = ss_tcp_state_change;
 		sk->sk_error_report = ss_tcp_error;
+		write_unlock_bh(&sk->sk_callback_lock);
 
 		/*
 		 * We know which socket is just accepted, so we just
@@ -439,19 +612,21 @@ ss_tcp_state_change(struct sock *sk)
 		 * FIXME it seems we should to do things below on TCP_CLOSE
 		 * instead of TCP_CLOSE_WAIT.
 		 */
-		SS_DBG("connection closed on socket %p\n", sk);
-		ss_tcp_close(sk);
+		ss_do_close(sk);
 	}
-
-	write_unlock_bh(&sk->sk_callback_lock);
 }
 
+/**
+ * Set protocol handler and initialize first callbacks.
+ */
 void
 ss_tcp_set_listen(struct sock *sk, SsProto *handler)
 {
 	write_lock_bh(&sk->sk_callback_lock);
 
 	BUG_ON(sk->sk_user_data);
+
+	ss_set_sock_atomic_alloc(sk);
 
 	sk->sk_state_change = ss_tcp_state_change;
 	sk->sk_user_data = handler;
@@ -460,17 +635,6 @@ ss_tcp_set_listen(struct sock *sk, SsProto *handler)
 	write_unlock_bh(&sk->sk_callback_lock);
 }
 EXPORT_SYMBOL(ss_tcp_set_listen);
-
-/**
- * Just a dummy and ugly wrapper for inet_release().
- */
-void
-ss_sock_release(struct sock *sk)
-{
-	struct socket sock = { .sk = sk };
-	inet_release(&sock);
-}
-EXPORT_SYMBOL(ss_sock_release);
 
 /*
  * ------------------------------------------------------------------------
