@@ -1,6 +1,6 @@
-	# Linux Kernel Synchronous Sockets
+# Linux Kernel Synchronous Sockets
 
-  ## What it is?
+## What it is?
 
 This is Linux kernel module which exports set of socket functions to other
 kernel modules, i.e. it can be called kernel library.
@@ -24,12 +24,12 @@ See [What's Wrong With Sockets Performance And How to Fix It]
 for design concepts.
 
 
-  ## Examples
+## Examples
 
 You can find example of the API usage in t/kernel/sync_kserver.c .
 
 
-  ## TODO for further development
+## TODO for further development
 
 * More accurate (and fast) ss_drain_accept_queue() implementation
   (kernel patching is needed);
