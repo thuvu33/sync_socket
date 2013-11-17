@@ -30,7 +30,7 @@ typedef int (*ss_proto_hndl_t)(void *conn, unsigned char *data, size_t len);
 /* Protocols stack handlers. */
 typedef struct ss_proto_t {
 	ss_proto_hndl_t		handlers[SS_MAX_PROTO_STACK_N];
-	void			*listener;
+	struct socket		*listener;
 } SsProto;
 
 void ss_proto_push_handler(SsProto *proto, ss_proto_hndl_t handler);

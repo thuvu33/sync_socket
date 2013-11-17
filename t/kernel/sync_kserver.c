@@ -27,7 +27,7 @@
 #include <linux/module.h>
 #include <net/inet_sock.h>
 
-#include "../../sock.h"
+#include "../../sync_socket.h"
 
 #define MAX_CONN	(1000 * 1000)
 #define PORT		5000
@@ -38,7 +38,6 @@ typedef struct {
 	SsProto		proto;
 } MyProto;
 
-static struct socket *listen_sock;
 static MyProto my_proto;
 
 /* Statistics */
@@ -128,6 +127,7 @@ int __init
 kserver_init(void)
 {
 	int r;
+	struct socket *lsk;
 	struct sockaddr_in saddr;
 
 	r = ss_hooks_register(&ssocket_hooks);
@@ -136,33 +136,33 @@ kserver_init(void)
 		return r;
 	}
 
-	r = sock_create_kern(AF_INET, SOCK_STREAM, IPPROTO_TCP, &listen_sock);
+	r = sock_create_kern(AF_INET, SOCK_STREAM, IPPROTO_TCP, &lsk);
 	if (r) {
 		printk(KERN_ERR "Can't listening socket\n");
 		goto err_create;
 	}
 
-	inet_sk(listen_sock->sk)->freebind = 1;
-	listen_sock->sk->sk_reuse = 1;
+	inet_sk(lsk->sk)->freebind = 1;
+	lsk->sk->sk_reuse = 1;
 
 	/* Register application logic stack for the socket. */
 	ss_proto_push_handler((SsProto *)&my_proto, kserver_read);
+
 	/* Set TCP handlers. */
-	ss_tcp_set_listen(listen_sock->sk, (SsProto *)&my_proto);
+	ss_tcp_set_listen(lsk, (SsProto *)&my_proto);
 
 	memset(&saddr, 0, sizeof(saddr));
 	saddr.sin_family = AF_INET;
 	saddr.sin_addr.s_addr = htonl(INADDR_ANY);
 	saddr.sin_port = htons(PORT);
 
-	r = listen_sock->ops->bind(listen_sock, (struct sockaddr *)&saddr,
-				   sizeof(saddr));
+	r = lsk->ops->bind(lsk, (struct sockaddr *)&saddr, sizeof(saddr));
 	if (r) {
 		printk(KERN_ERR "Can't bind listening socket\n");
 		goto err_call;
 	}
 
-	r = listen_sock->ops->listen(listen_sock, 1000);
+	r = lsk->ops->listen(lsk, 1000);
 	if (r) {
 		printk(KERN_ERR "Can't listen on socket\n");
 		goto err_call;
@@ -170,7 +170,7 @@ kserver_init(void)
 
 	return 0;
 err_call:
-	sock_release(listen_sock);
+	sock_release(lsk);
 err_create:
 	ss_hooks_unregister(&ssocket_hooks);
 	return r;
@@ -181,7 +181,7 @@ kserver_exit(void)
 {
 	int ci;
 
-	sock_release(listen_sock);
+	sock_release(my_proto.proto.listener);
 
 	for (ci = 0; ci < atomic_read(&conn_i); ++ci)
 		if (conn[ci])

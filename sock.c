@@ -29,13 +29,12 @@
 #include <net/tcp.h>
 #include <net/inet_common.h>
 
-#include "common.h"
 #include "log.h"
-#include "sock.h"
+#include "sync_socket.h"
 
 MODULE_AUTHOR("NatSys Lab. (http://natsys-lab.com)");
 MODULE_DESCRIPTION("Linux Kernel Synchronous Sockets");
-MODULE_VERSION("0.2.0");
+MODULE_VERSION("0.3.0");
 MODULE_LICENSE("GPL");
 
 static SsHooks *ss_hooks __read_mostly;
@@ -582,7 +581,7 @@ ss_tcp_state_change(struct sock *sk)
 		/* Process the new TCP connection. */
 
 		SsProto *proto = sk->sk_user_data;
-		struct sock *lsk = proto->listener;
+		struct socket *lsk = proto->listener;
 		BUG_ON(!lsk);
 
 		ss_set_sock_atomic_alloc(sk);
@@ -602,8 +601,8 @@ ss_tcp_state_change(struct sock *sk)
 		 * drain listening socket accept queue and don't care
 		 * about returned socket.
 		 */
-		assert_spin_locked(&lsk->sk_lock.slock);
-		ss_drain_accept_queue(lsk, sk);
+		assert_spin_locked(&lsk->sk->sk_lock.slock);
+		ss_drain_accept_queue(lsk->sk, sk);
 	}
 	else if (sk->sk_state == TCP_CLOSE_WAIT) {
 		/*
@@ -620,8 +619,10 @@ ss_tcp_state_change(struct sock *sk)
  * Set protocol handler and initialize first callbacks.
  */
 void
-ss_tcp_set_listen(struct sock *sk, SsProto *handler)
+ss_tcp_set_listen(struct socket *sock, SsProto *handler)
 {
+	struct sock *sk = sock->sk;
+
 	write_lock_bh(&sk->sk_callback_lock);
 
 	BUG_ON(sk->sk_user_data);
@@ -630,7 +631,7 @@ ss_tcp_set_listen(struct sock *sk, SsProto *handler)
 
 	sk->sk_state_change = ss_tcp_state_change;
 	sk->sk_user_data = handler;
-	handler->listener = sk;
+	handler->listener = sock;
 
 	write_unlock_bh(&sk->sk_callback_lock);
 }

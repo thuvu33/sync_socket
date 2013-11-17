@@ -40,9 +40,6 @@
  *	able to connect to peer with some callback on reading (exactly as it is
  *	for server side). Connect must be asynchronous operation with on_connect
  *	callback.
- *
- * 3.	The system must support number of protocol stacks simultaneously,
- * 	so no static variables should be used.
  */
 int
 ss_proto_run_handlers(SsProto *proto, unsigned char *data, size_t len)

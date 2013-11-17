@@ -24,6 +24,7 @@
 
 #include <linux/skbuff.h>
 
+#include "common.h"
 #include "proto.h"
 
 /* Table of socket connection callbacks. */
@@ -53,7 +54,7 @@ typedef struct {
 int ss_hooks_register(SsHooks* hooks);
 void ss_hooks_unregister(SsHooks* hooks);
 
-void ss_tcp_set_listen(struct sock *sk, SsProto *handler);
+void ss_tcp_set_listen(struct socket *sk, SsProto *handler);
 void ss_send(struct sock *sk, struct sk_buff_head *skb_list, int len);
 void ss_close(struct sock *sk);
 
