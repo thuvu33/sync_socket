@@ -77,7 +77,7 @@ stat_print(void)
  * Just do some useless work.
  */
 static int
-kserver_read(void *proto, unsigned char *data, size_t len)
+kserver_read(struct sock *sk, unsigned char *data, size_t len)
 {
 	int i;
 	for (i = 0; i < len / 4; ++i)
@@ -121,6 +121,7 @@ kserver_connection_drop(struct sock *sk)
 static SsHooks ssocket_hooks = {
 	.connection_new		= kserver_connection_new,
 	.connection_drop	= kserver_connection_drop,
+	.connection_recv	= kserver_read,
 };
 
 int __init
@@ -144,9 +145,6 @@ kserver_init(void)
 
 	inet_sk(lsk->sk)->freebind = 1;
 	lsk->sk->sk_reuse = 1;
-
-	/* Register application logic stack for the socket. */
-	ss_proto_push_handler((SsProto *)&my_proto, kserver_read);
 
 	/* Set TCP handlers. */
 	ss_tcp_set_listen(lsk, (SsProto *)&my_proto);

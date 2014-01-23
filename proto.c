@@ -26,56 +26,6 @@
 #include "proto.h"
 
 /**
- * Execute all l5-l7 protocol handlers.
- * @return number of processed bytes at session (l5) level or error code.
- *
- * TODO
- * 1.	Currently protocol handlers are executed only for reading, so say
- *	application protocol is getting exactly the same message as presentation
- *	protocol just processed. The hadnlers must be able to adjust
- *	the messages. Also they should accept some session object to do their
- *	work (e.g. crypto context for SSL layer).
- *
- * 2.	Client side protohandlers also must be implemented, i.e. we should be
- *	able to connect to peer with some callback on reading (exactly as it is
- *	for server side). Connect must be asynchronous operation with on_connect
- *	callback.
- */
-int
-ss_proto_run_handlers(SsProto *proto, unsigned char *data, size_t len)
-{
-	int i, ret = SS_OK;
-
-	for (i = 0; i < SS_MAX_PROTO_STACK_N && proto->handlers[i]; ++i) {
-		int r = proto->handlers[i](proto, data, len);
-		if (unlikely(r < 0))
-			/* An error occured, don't run rest of callbacks. */
-			return r;
-		switch (r) {
-		case SS_OK:
-			continue;
-		case SS_DROP:
-			/*
-			 * The packet is bad - don't spend resources to
-			 * handle it in other callbacks.
-			 */
-			return r;
-		case SS_POSTPONE:
-			/*
-			 * Remember that we have to postpone the packet and
-			 * continue with it. If somebody decides that it must
-			 * be dropped, then it will be dropped instead of
-			 * postponing.
-			 */
-			ret = r;
-			continue;
-		}
-	}
-
-	return ret;
-}
-
-/**
  * Register new application protocol handler.
  */
 void

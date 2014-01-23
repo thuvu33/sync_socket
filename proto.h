@@ -25,15 +25,6 @@
 
 #define SS_MAX_PROTO_STACK_N	4
 
-typedef int (*ss_proto_hndl_t)(void *conn, unsigned char *data, size_t len);
-
-/* Protocols stack handlers. */
-typedef struct ss_proto_t {
-	ss_proto_hndl_t		handlers[SS_MAX_PROTO_STACK_N];
-	struct socket		*listener;
-} SsProto;
-
 void ss_proto_push_handler(SsProto *proto, ss_proto_hndl_t handler);
-int ss_proto_run_handlers(SsProto *proto, unsigned char *data, size_t len);
 
 #endif /* __SS_PROTO_H__ */

@@ -3,7 +3,7 @@
  *
  * Generic socket routines.
  *
- * Copyright (C) 2012-2013 NatSys Lab. (info@natsys-lab.com).
+ * Copyright (C) 2012-2014 NatSys Lab. (info@natsys-lab.com).
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by
@@ -97,15 +97,15 @@ ss_send(struct sock *sk, struct sk_buff_head *skb_list, int len)
 EXPORT_SYMBOL(ss_send);
 
 static int
-ss_tcp_process_proto_skb(SsProto *proto, unsigned char *data, size_t len,
+ss_tcp_process_proto_skb(struct sock *sk, unsigned char *data, size_t len,
 			 struct sk_buff *skb)
 {
-	int r = ss_proto_run_handlers(proto, data, len);
+	int r = SS_CALL(connection_recv, sk, data, len);
 	if (unlikely(r))
 		return r;
 
 	if (r == SS_POSTPONE) {
-		SS_CALL(postpone_skb, proto, skb);
+		SS_CALL(postpone_skb, sk->sk_user_data, skb);
 		r = SS_OK;
 	}
 
@@ -119,7 +119,7 @@ ss_tcp_process_proto_skb(SsProto *proto, unsigned char *data, size_t len,
  */
 static int
 ss_tcp_process_skb(struct sk_buff *skb, struct sock *sk, unsigned int off,
-		   SsProto *proto, int *count)
+		   int *count)
 {
 	int i, r = SS_OK;
 	int lin_len = skb_headlen(skb);
@@ -127,9 +127,9 @@ ss_tcp_process_skb(struct sk_buff *skb, struct sock *sk, unsigned int off,
 
 	/* Process linear data. */
 	if (off < lin_len) {
-		SS_CALL(put_skb_to_msg, proto, skb);
+		SS_CALL(put_skb_to_msg, sk->sk_user_data, skb);
 
-		r = ss_tcp_process_proto_skb(proto, skb->data + off,
+		r = ss_tcp_process_proto_skb(sk, skb->data + off,
 					     lin_len - off, skb);
 		if (r < 0 || r == SS_DROP)
 			return r;
@@ -145,9 +145,9 @@ ss_tcp_process_skb(struct sk_buff *skb, struct sock *sk, unsigned int off,
 		if (f_sz > off) {
 			unsigned char *vaddr = kmap_atomic(skb_frag_page(frag));
 
-			SS_CALL(put_skb_to_msg, proto, skb);
+			SS_CALL(put_skb_to_msg, sk->sk_user_data, skb);
 
-			r = ss_tcp_process_proto_skb(proto, vaddr + off,
+			r = ss_tcp_process_proto_skb(sk, vaddr + off,
 						     f_sz - off, skb);
 
 			kunmap_atomic(vaddr);
@@ -163,7 +163,7 @@ ss_tcp_process_skb(struct sk_buff *skb, struct sock *sk, unsigned int off,
 	/* Process packet fragments. */
 	skb_walk_frags(skb, frag_i) {
 		if (frag_i->len > off) {
-			r = ss_tcp_process_skb(frag_i, sk, off, proto, count);
+			r = ss_tcp_process_skb(frag_i, sk, off, count);
 			if (r < 0)
 				return r;
 			off = 0;
@@ -356,16 +356,7 @@ static int
 ss_tcp_process_connection(struct sk_buff *skb, struct sock *sk,
 			  unsigned int off, int *count)
 {
-	int r;
-	SsProto *proto = sk->sk_user_data;
-
-	r = SS_CALL(connection_recv, sk);
-	if (r) {
-		ss_do_close(sk);
-		return r;
-	}
-
-	r = ss_tcp_process_skb(skb, sk, off, proto, count);
+	int r = ss_tcp_process_skb(skb, sk, off, count);
 	if (r < 0 || r == SS_DROP) {
 		if (r < 0)
 			SS_WARN("can't process app data on socket %p\n", sk);

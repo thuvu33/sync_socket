@@ -3,7 +3,7 @@
  *
  * Server and client socket (connecton) definitions.
  *
- * Copyright (C) 2012-2013 NatSys Lab. (info@natsys-lab.com).
+ * Copyright (C) 2012-2014 NatSys Lab. (info@natsys-lab.com).
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by
@@ -24,8 +24,25 @@
 
 #include <linux/skbuff.h>
 
-#include "common.h"
-#include "proto.h"
+/**
+ * Responses from socket hook functions.
+ */
+enum {
+	/* Current packet looks good and we can safely pass it. */
+	SS_OK = 0,
+
+	/* The packet must be dropped. */
+	SS_DROP,
+
+	/* The packet should be stashed (made by callback). */
+	SS_POSTPONE,
+};
+
+/* Protocols stack handlers. */
+typedef struct ss_proto_t {
+	struct socket	*listener;
+	int		type;
+} SsProto;
 
 /* Table of socket connection callbacks. */
 typedef struct {
@@ -36,7 +53,8 @@ typedef struct {
 	int (*connection_drop)(struct sock *sk);
 
 	/* Process data received on the socket. */
-	int (*connection_recv)(struct sock *sk);
+	int (*connection_recv)(struct sock *sk, unsigned char *data,
+			       size_t len);
 
 	/*
 	 * Add the @skb to the current connection message.

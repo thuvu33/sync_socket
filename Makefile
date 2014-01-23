@@ -20,7 +20,7 @@ EXTRA_CFLAGS = -DDEBUG
 KERNEL = /lib/modules/$(shell uname -r)/source
 
 obj-m = sync_socket.o
-sync_socket-objs = proto.o sock.o
+sync_socket-objs = sock.o
 
 all:
 	make -C $(KERNEL) M=$(PWD) modules

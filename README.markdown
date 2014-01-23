@@ -17,21 +17,26 @@ It uses upcalls to react on socket events (new data arrived, connection error
 etc) and downcalls to perform user operations (e.g. connect to a host).
 
 The module uses number of standard Linux calls (currently TCP only), so the
-kernel must be patched with linux-3.10.10-sync_sockets.diff firstly.
+kernel must be patched with linux-3.10.10-sync\_sockets.diff firstly.
 
 See [What's Wrong With Sockets Performance And How to Fix It]
 (http://natsys-lab.blogspot.ru/2013/03/whats-wrong-with-sockets-performance.html)
 for design concepts.
 
 
-### Examples
+### Usage Examples
 
-You can find example of the API usage in t/kernel/sync_kserver.c .
+You can find example of the API usage in t/kernel/sync\_kserver.c .
+
+### Build
+
+$ cd sync\_socket && make	# build the kernel module
+$ cd t && make			# build tests
 
 
 ### TODO for further development
 
-* More accurate (and fast) ss_drain_accept_queue() implementation
+* More accurate (and fast) ss\_drain\_accept\_queue() implementation
   (kernel patching is needed);
 * Synchronous client side socket API (e.g. connect());
 * UDP and SCTP support.
