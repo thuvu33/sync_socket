@@ -30,8 +30,8 @@ You can find example of the API usage in t/kernel/sync\_kserver.c .
 
 ### Build
 
-$ cd sync\_socket && make	# build the kernel module
-$ cd t && make			# build tests
+	$ cd sync\_socket && make	# build the kernel module
+	$ cd t && make			# build tests
 
 
 ### TODO for further development
