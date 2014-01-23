@@ -34,7 +34,7 @@
 
 MODULE_AUTHOR("NatSys Lab. (http://natsys-lab.com)");
 MODULE_DESCRIPTION("Linux Kernel Synchronous Sockets");
-MODULE_VERSION("0.3.0");
+MODULE_VERSION("0.4.0");
 MODULE_LICENSE("GPL");
 
 static SsHooks *ss_hooks __read_mostly;
