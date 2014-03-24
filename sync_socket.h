@@ -28,14 +28,14 @@
  * Responses from socket hook functions.
  */
 enum {
-	/* Current packet looks good and we can safely pass it. */
-	SS_OK = 0,
-
 	/* The packet must be dropped. */
-	SS_DROP,
+	SS_DROP		= -2,
 
 	/* The packet should be stashed (made by callback). */
-	SS_POSTPONE,
+	SS_POSTPONE	= -1,
+
+	/* Current packet looks good and we can safely pass it. */
+	SS_OK		= 0,
 };
 
 /* Protocols stack handlers. */
