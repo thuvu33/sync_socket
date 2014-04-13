@@ -101,8 +101,6 @@ ss_tcp_process_proto_skb(struct sock *sk, unsigned char *data, size_t len,
 			 struct sk_buff *skb)
 {
 	int r = SS_CALL(connection_recv, sk, data, len);
-	if (unlikely(r))
-		return r;
 
 	if (r == SS_POSTPONE) {
 		SS_CALL(postpone_skb, sk->sk_user_data, skb);
@@ -573,12 +571,18 @@ ss_tcp_state_change(struct sock *sk)
 
 		SsProto *proto = sk->sk_user_data;
 		struct socket *lsk = proto->listener;
+		int r;
+
 		BUG_ON(!lsk);
 
 		ss_set_sock_atomic_alloc(sk);
 
 		/* The callback is called from tcp_rcv_state_process(). */
-		SS_CALL(connection_new, sk);
+		r = SS_CALL(connection_new, sk);
+		if (r) {
+			ss_do_close(sk);
+			return;
+		}
 
 		/* Set socket callbaks for new data socket. */
 		write_lock_bh(&sk->sk_callback_lock);
