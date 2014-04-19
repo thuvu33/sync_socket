@@ -49,7 +49,7 @@ connection is established it immediately starts to transfer messages).
 The second test with socket implementation which we done is how requests per
 second characteristic depends on number of established connections.
 
-![Image](../blob/master/stat/rps.png?raw=true)
+![Image](stat/rps.png)
 
 
 ### Usage Examples
