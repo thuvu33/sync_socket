@@ -44,7 +44,7 @@ Firstly, we've tested how quickly 20 thousands connections can be established
 in parallel with sending message on already open connections (i.e. when a
 connection is established it immediately starts to transfer messages).
 
-![Image](../blob/master/stat/conn_rate.png?raw=true)
+![Image](stat/conn_rate.png)
 
 The second test with socket implementation which we done is how requests per
 second characteristic depends on number of established connections.
