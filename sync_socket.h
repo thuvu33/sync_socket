@@ -1,5 +1,5 @@
 /**
- * Synchronous Socket API.
+ *		Synchronous Socket API.
  *
  * Server and client socket (connecton) definitions.
  *

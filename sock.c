@@ -1,5 +1,5 @@
 /**
- * Synchronous Socket API.
+ *		Synchronous Socket API.
  *
  * Generic socket routines.
  *
@@ -34,7 +34,7 @@
 
 MODULE_AUTHOR("NatSys Lab. (http://natsys-lab.com)");
 MODULE_DESCRIPTION("Linux Kernel Synchronous Sockets");
-MODULE_VERSION("0.4.0");
+MODULE_VERSION("0.4.1");
 MODULE_LICENSE("GPL");
 
 static SsHooks *ss_hooks __read_mostly;
@@ -100,8 +100,11 @@ static int
 ss_tcp_process_proto_skb(struct sock *sk, unsigned char *data, size_t len,
 			 struct sk_buff *skb)
 {
-	int r = SS_CALL(connection_recv, sk, data, len);
+	int r = SS_CALL(put_skb_to_msg, sk->sk_user_data, skb);
+	if (r != SS_OK)
+		return r;
 
+	r = SS_CALL(connection_recv, sk, data, len);
 	if (r == SS_POSTPONE) {
 		SS_CALL(postpone_skb, sk->sk_user_data, skb);
 		r = SS_OK;
@@ -125,11 +128,9 @@ ss_tcp_process_skb(struct sk_buff *skb, struct sock *sk, unsigned int off,
 
 	/* Process linear data. */
 	if (off < lin_len) {
-		SS_CALL(put_skb_to_msg, sk->sk_user_data, skb);
-
 		r = ss_tcp_process_proto_skb(sk, skb->data + off,
 					     lin_len - off, skb);
-		if (r < 0 || r == SS_DROP)
+		if (r < 0)
 			return r;
 		*count += lin_len - off;
 		off = 0;
@@ -143,14 +144,12 @@ ss_tcp_process_skb(struct sk_buff *skb, struct sock *sk, unsigned int off,
 		if (f_sz > off) {
 			unsigned char *vaddr = kmap_atomic(skb_frag_page(frag));
 
-			SS_CALL(put_skb_to_msg, sk->sk_user_data, skb);
-
 			r = ss_tcp_process_proto_skb(sk, vaddr + off,
 						     f_sz - off, skb);
 
 			kunmap_atomic(vaddr);
 
-			if (r < 0 || r == SS_DROP)
+			if (r < 0)
 				return r;
 			*count += f_sz - off;
 			off = 0;
@@ -187,6 +186,7 @@ ss_tcp_process_skb(struct sk_buff *skb, struct sock *sk, unsigned int off,
  * TODO In some cases we need to close socket agresively w/o FIN_WAIT_2 state,
  * e.g. by sending RST. So we need to add second parameter to the function
  * which says how to close the socket.
+ * One of the examples is rcl_req_limit() (it should reset connections).
  * See tcp_sk(sk)->linger2 processing in standard tcp_close().
  */
 static void
@@ -196,9 +196,14 @@ ss_do_close(struct sock *sk)
 	int data_was_unread = 0;
 	int state;
 
+	SS_DBG("Close socket %p\n", sk);
+
 	if (unlikely(!sk))
 		return;
+
 	BUG_ON(sk->sk_state == TCP_LISTEN);
+	/* Don't try to close unassigned socket. */
+	BUG_ON(!sk->sk_user_data);
 
 	SS_CALL(connection_drop, sk);
 
@@ -355,9 +360,8 @@ ss_tcp_process_connection(struct sk_buff *skb, struct sock *sk,
 			  unsigned int off, int *count)
 {
 	int r = ss_tcp_process_skb(skb, sk, off, count);
-	if (r < 0 || r == SS_DROP) {
-		if (r < 0)
-			SS_WARN("can't process app data on socket %p\n", sk);
+	if (r < 0) {
+		SS_WARN("can't process app data on socket %p\n", sk);
 		/*
 		 * Drop connection on internal errors as well as
 		 * on banned packets.
@@ -403,9 +407,9 @@ ss_tcp_process_data(struct sock *sk)
 		if (off < skb->len) {
 			int count = 0;
 			int r = ss_tcp_process_connection(skb, sk, off, &count);
-			if (r < 0 || r == SS_DROP) {
+			if (r < 0) {
 				__kfree_skb(skb);
-				SS_WARN("DROP blocked skb");
+				SS_DBG("DROP blocked skb");
 				goto out; /* connection dropped */
 			}
 			tp->copied_seq += count;

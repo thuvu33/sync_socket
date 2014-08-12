@@ -1,7 +1,7 @@
 /**
  * Multithreaded client for performance testing of Synchronous Socket API.
  *
- * Copyright (C) 2012-2013 NatSys Lab. (info@natsys-lab.com).
+ * Copyright (C) 2012-2014 NatSys Lab. (info@natsys-lab.com).
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by
@@ -48,6 +48,7 @@ run_tcp_load()
 			std::cerr << "can't create socket #" << i << std::endl;
 		}
 
+		// Send segments as soon as possible.
 		const int o = 1;
 		if (setsockopt(sd[i], IPPROTO_TCP, TCP_NODELAY, &o, sizeof(o)))
 			std::cerr << "can't set TCP_NODELAY on socket #" << i
