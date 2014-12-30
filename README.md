@@ -1,5 +1,8 @@
 ## Linux Kernel Synchronous Sockets
 
+**The repository is outdated, please refer to [Tempesta project](https://github.com/natsys/tempesta)
+for current version of the library.**
+
 ### What it is?
 
 This is Linux kernel module which exports set of socket functions to other
