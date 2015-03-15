@@ -1,7 +1,7 @@
 ## Linux Kernel Synchronous Sockets
 
 **The repository is outdated, please refer to [Tempesta project](https://github.com/natsys/tempesta)
-for current version of the library.**
+for current version of the code.**
 
 ### What it is?
 

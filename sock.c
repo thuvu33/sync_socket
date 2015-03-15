@@ -24,7 +24,6 @@
  * TODO:
  * -- Read cache objects by 64KB and use GSO?
  */
-#include <linux/highmem.h>
 #include <linux/module.h>
 #include <net/tcp.h>
 #include <net/inet_common.h>
@@ -34,7 +33,7 @@
 
 MODULE_AUTHOR("NatSys Lab. (http://natsys-lab.com)");
 MODULE_DESCRIPTION("Linux Kernel Synchronous Sockets");
-MODULE_VERSION("0.4.1");
+MODULE_VERSION("0.4.3");
 MODULE_LICENSE("GPL");
 
 static SsHooks *ss_hooks __read_mostly;
@@ -57,7 +56,7 @@ static SsHooks *ss_hooks __read_mostly;
  * TODO use MSG_MORE untill we reach end of message.
  */
 void
-ss_send(struct sock *sk, struct sk_buff_head *skb_list, int len)
+ss_send(struct sock *sk, const SsSkbList *skb_list)
 {
 	struct sk_buff *skb;
 	struct tcp_skb_cb *tcb;
@@ -65,34 +64,42 @@ ss_send(struct sock *sk, struct sk_buff_head *skb_list, int len)
 	int flags = MSG_DONTWAIT; /* we can't sleep */
 	int size_goal, mss_now;
 
+	bh_lock_sock_nested(sk);
+
 	mss_now = tcp_send_mss(sk, &size_goal, flags);
 
-	BUG_ON(skb_queue_empty(skb_list));
-	for (skb = skb_peek(skb_list), tcb = TCP_SKB_CB(skb);
-	     skb; skb = skb_peek(skb_list))
+	BUG_ON(ss_skb_queue_empty(skb_list));
+	for (skb = ss_skb_peek(skb_list), tcb = TCP_SKB_CB(skb);
+	     skb; skb = ss_skb_next(skb_list, skb))
 	{
-		skb_unlink(skb, skb_list);
+		skb->ip_summed = CHECKSUM_PARTIAL;
+		skb_shinfo(skb)->gso_segs = 0;
 
-		skb_entail(sk, skb);
 		/*
 		 * TODO
 		 * Mark all data with PUSH to force receiver to consume
 		 * the data. Currently we do this in debugging purpose.
-		 * We need to do this only for complete messages.
+		 * We need to do this only for complete messages/skbs.
+		 * (Actually tcp_push() already does it for the last skb.)
 		 */
 		tcp_mark_push(tp, skb);
-		skb->ip_summed = CHECKSUM_PARTIAL;
-		skb_shinfo(skb)->gso_segs = 0;
+
+		SS_DBG("%s:%d entail skb=%p data_len=%u len=%u\n",
+		       __FUNCTION__, __LINE__, skb, skb->data_len, skb->len);
+
+		skb_entail(sk, skb);
+
+		tcb->end_seq += skb->len;
+		tp->write_seq += skb->len;
 	}
 
-	tcb->end_seq += len;
-	tp->write_seq += len;
-
-	SS_DBG("%s:%d is_queue_empty=%d tcp_send_head(sk)=%p sk->sk_state=%d\n",
-	       __FUNCTION__, __LINE__, tcp_write_queue_empty(sk),
-	       tcp_send_head(sk), sk->sk_state);
+	SS_DBG("%s:%d sk=%p is_queue_empty=%d tcp_send_head(sk)=%p"
+	       " sk->sk_state=%d\n", __FUNCTION__, __LINE__,
+	       sk, tcp_write_queue_empty(sk), tcp_send_head(sk), sk->sk_state);
 
 	tcp_push(sk, flags, mss_now, TCP_NAGLE_OFF|TCP_NAGLE_PUSH);
+
+	bh_unlock_sock(sk);
 }
 EXPORT_SYMBOL(ss_send);
 
@@ -117,6 +124,9 @@ ss_tcp_process_proto_skb(struct sock *sk, unsigned char *data, size_t len,
  * Process a socket buffer.
  * See standard skb_copy_datagram_iovec() implementation.
  * @return SS_OK, SS_DROP or negative value of error code.
+ *
+ * In any case returns with @skb passed to application layer.
+ * We don't manege the skb any more.
  */
 static int
 ss_tcp_process_skb(struct sk_buff *skb, struct sock *sk, unsigned int off,
@@ -142,13 +152,9 @@ ss_tcp_process_skb(struct sk_buff *skb, struct sock *sk, unsigned int off,
 		const skb_frag_t *frag = &skb_shinfo(skb)->frags[i];
 		unsigned int f_sz = skb_frag_size(frag);
 		if (f_sz > off) {
-			unsigned char *vaddr = kmap_atomic(skb_frag_page(frag));
-
-			r = ss_tcp_process_proto_skb(sk, vaddr + off,
+			unsigned char *f_addr = skb_frag_address(frag);
+			r = ss_tcp_process_proto_skb(sk, f_addr + off,
 						     f_sz - off, skb);
-
-			kunmap_atomic(vaddr);
-
 			if (r < 0)
 				return r;
 			*count += f_sz - off;
@@ -196,7 +202,8 @@ ss_do_close(struct sock *sk)
 	int data_was_unread = 0;
 	int state;
 
-	SS_DBG("Close socket %p\n", sk);
+	SS_DBG("Close socket %p (account=%d)\n",
+		sk, sk_has_account(sk));
 
 	if (unlikely(!sk))
 		return;
@@ -228,6 +235,7 @@ ss_do_close(struct sock *sk)
 		u32 len = TCP_SKB_CB(skb)->end_seq - TCP_SKB_CB(skb)->seq -
 			  tcp_hdr(skb)->fin;
 		data_was_unread += len;
+		SS_DBG("free rcv skb %p\n", skb);
 		__kfree_skb(skb);
 	}
 
@@ -244,8 +252,9 @@ ss_do_close(struct sock *sk)
 	else if (tcp_close_state(sk)) {
 		/* The code below is taken from tcp_send_fin(). */
 		struct tcp_sock *tp = tcp_sk(sk);
-		struct sk_buff *skb = tcp_write_queue_tail(sk);
 		int mss_now = tcp_current_mss(sk);
+
+		skb = tcp_write_queue_tail(sk);
 
 		if (tcp_send_head(sk) != NULL) {
 			/* Send FIN with data if we have any. */
@@ -281,7 +290,7 @@ adjudge_to_death:
 	 * so don't acquire sk->sk_lock.
 	 */
 	if (sk->sk_backlog.tail) {
-		struct sk_buff *skb = sk->sk_backlog.head;
+		skb = sk->sk_backlog.head;
 		do {
 			sk->sk_backlog.head = sk->sk_backlog.tail = NULL;
 			do {
@@ -293,6 +302,7 @@ adjudge_to_death:
 				 * so there is nobody interesting in receiving
 				 * data.
 				 */
+				SS_DBG("free backlog skb %p\n", skb);
 				__kfree_skb(skb);
 				skb = next;
 			} while (skb != NULL);
@@ -350,29 +360,6 @@ ss_close(struct sock *sk)
 EXPORT_SYMBOL(ss_close);
 
 /**
- * Process received data on the socket.
- * @return SS_OK, SS_DROP or negative value of error code.
- *
- * TODO One connection MUST be processed on one CPU - ensure this.
- */
-static int
-ss_tcp_process_connection(struct sk_buff *skb, struct sock *sk,
-			  unsigned int off, int *count)
-{
-	int r = ss_tcp_process_skb(skb, sk, off, count);
-	if (r < 0) {
-		SS_WARN("can't process app data on socket %p\n", sk);
-		/*
-		 * Drop connection on internal errors as well as
-		 * on banned packets.
-		 */
-		ss_do_close(sk);
-	}
-
-	return r;
-}
-
-/**
  * Receive data on TCP socket. Very similar to standard tcp_recvmsg().
  *
  * We can't use standard tcp_read_sock() with our actor callback, because
@@ -406,19 +393,25 @@ ss_tcp_process_data(struct sock *sk)
 			off--;
 		if (off < skb->len) {
 			int count = 0;
-			int r = ss_tcp_process_connection(skb, sk, off, &count);
+			int r = ss_tcp_process_skb(skb, sk, off, &count);
 			if (r < 0) {
+				SS_WARN("can't process app data on socket %p\n",
+					sk);
+				/*
+				 * Drop connection on internal errors as well as
+				 * on banned packets.
+				 *
+				 * ss_do_close() is responsible for calling
+				 * application layer connection closing callback
+				 * which will free all the passed and linked
+				 * with currently processed message skbs.
+				 */
 				__kfree_skb(skb);
-				SS_DBG("DROP blocked skb");
+				ss_do_close(sk);
 				goto out; /* connection dropped */
 			}
 			tp->copied_seq += count;
 			processed += count;
-			/*
-			 * TODO currently we free the skb,
-			 * but we shouldn't do this if it's postponed.
-			 */
-			__kfree_skb(skb);
 		}
 		else if (tcp_hdr(skb)->fin) {
 			SS_DBG("received FIN, do active close\n");
@@ -510,6 +503,8 @@ ss_drain_accept_queue(struct sock *lsk, struct sock *nsk)
  *  	Socket callbacks
  * ------------------------------------------------------------------------
  */
+static void ss_tcp_state_change(struct sock *sk);
+
 /*
  * Called when a new data received on the socket.
  * Called under bh_lock_sock_nested(sk) (see tcp_v4_rcv()).
@@ -565,6 +560,24 @@ ss_set_sock_atomic_alloc(struct sock *sk)
 }
 
 /**
+ * Make the data socket serviced by synchronous sockets.
+ */
+void
+ss_set_callbacks(struct sock *sk)
+{
+	write_lock_bh(&sk->sk_callback_lock);
+
+	ss_set_sock_atomic_alloc(sk);
+
+	sk->sk_data_ready = ss_tcp_data_ready;
+	sk->sk_state_change = ss_tcp_state_change;
+	sk->sk_error_report = ss_tcp_error;
+
+	write_unlock_bh(&sk->sk_callback_lock);
+}
+EXPORT_SYMBOL(ss_set_callbacks);
+
+/**
  * Socket state change callback.
  */
 static void
@@ -579,8 +592,6 @@ ss_tcp_state_change(struct sock *sk)
 
 		BUG_ON(!lsk);
 
-		ss_set_sock_atomic_alloc(sk);
-
 		/* The callback is called from tcp_rcv_state_process(). */
 		r = SS_CALL(connection_new, sk);
 		if (r) {
@@ -588,12 +599,7 @@ ss_tcp_state_change(struct sock *sk)
 			return;
 		}
 
-		/* Set socket callbaks for new data socket. */
-		write_lock_bh(&sk->sk_callback_lock);
-		sk->sk_data_ready = ss_tcp_data_ready;
-		sk->sk_state_change = ss_tcp_state_change;
-		sk->sk_error_report = ss_tcp_error;
-		write_unlock_bh(&sk->sk_callback_lock);
+		ss_set_callbacks(sk);
 
 		/*
 		 * We know which socket is just accepted, so we just

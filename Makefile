@@ -1,6 +1,7 @@
 #		Synchronous Socket API.
 #
 # Copyright (C) 2012-2014 NatSys Lab. (info@natsys-lab.com).
+# Copyright (C) 2015 Tempesta Technologies.
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by
@@ -15,6 +16,8 @@
 # You should have received a copy of the GNU General Public License along with
 # this program; if not, write to the Free Software Foundation, Inc., 59
 # Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+
+EXTRA_CFLAGS += -DDEBUG
 
 obj-m = sync_socket.o
 sync_socket-objs = sock.o
